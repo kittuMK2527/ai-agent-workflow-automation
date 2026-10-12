@@ -1,0 +1,5 @@
+{
+  "_comment": "Words the text validator treats as factual product claims. A generated text may only use them when they appear in the supplied product facts.",
+  "colors": ["black", "white", "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown", "grey", "gray", "navy", "beige", "cream", "silver", "gold", "olive", "tan", "charcoal", "indigo", "rust"],
+  "materials": ["leather", "cotton", "wool", "merino", "polyester", "nylon", "denim", "silk", "linen", "bamboo", "ceramic", "steel", "stainless", "aluminium", "aluminum", "plastic", "rubber", "canvas", "hemp", "acrylic", "glass", "wood", "suede", "cashmere"]
+}

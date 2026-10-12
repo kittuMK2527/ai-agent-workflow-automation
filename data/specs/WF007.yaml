@@ -1,0 +1,204 @@
+# WF007 - Marketing Campaign Brief
+workflow_id: WF007
+routing_examples:
+  - Put together a marketing brief for our autumn launch
+  - Draft a campaign plan with channels and a checklist
+  - I need a promo brief for these products
+routing_keywords: [campaign, campaign brief, marketing, brief, promotion, channels, checklist, launch campaign, marketing plan]
+
+examples:
+  - title: Complete request
+    request: "Create a campaign brief for the Autumn 2026 collection. Goal: increase autumn collection sales; audience: outdoor enthusiasts; promotion: 15% off; from 2026-11-01 to 2026-11-30"
+  - title: Excel test question (asks for goal, dates)
+    request: "Create a campaign brief for the new collection."
+    expect_state: needs_input
+    note: "Excel rule: if the goal or dates are missing, request them before generating the brief."
+
+interpretation_notes:
+  - "Excel decision logic: 'If campaign goal or dates are missing, request them before generating the brief'. Goal, start date and end date are required; so is the product list because the 'summarize products' step cannot run without it. Target audience and promotion are optional and shown as 'Not specified' rather than invented."
+  - "'dates' is interpreted as a start date and an end date (ISO, YYYY-MM-DD); an end date before the start date is sent back to the user."
+  - "'product list' may be SKUs, product names, or a collection name; items are looked up in the catalog and unknown items are reported."
+  - "Objective, messaging, channels and checklist come from the LLM when one is configured, otherwise from labelled built-in templates. The template tone line says it is a default."
+error_handling_notes:
+  - "None of the requested products found in the catalog: the workflow asks the user for valid products instead of writing a brief about nothing."
+
+inputs:
+  - name: campaign_goal
+    type: string
+    required: true
+    description: What the campaign should achieve, e.g. "increase autumn collection sales".
+    covers: ["Campaign goal"]
+    aliases: [goal, objective]
+    extract_pattern: '(?i)\b((?:increase|boost|drive|grow|raise|promote|launch|improve|build)\b[^.;\n]*?)(?=\s+(?:from|between|starting|with|targeting|aimed|using)\b|[.;\n]|$)'
+  - name: products
+    type: list
+    items: string
+    required: true
+    description: SKUs, product names or a collection name to feature.
+    covers: ["product list"]
+    aliases: [product list, collection, skus]
+    extract_pattern: '(?i)\bSKU[-\s]?\d{3,}\b|\b(?:autumn|spring|summer|winter)\s+\d{4}\b'
+  - name: target_audience
+    type: string
+    description: Who the campaign is aimed at.
+    covers: ["target audience"]
+    aliases: [audience]
+  - name: promotion
+    type: string
+    description: Offer or promotion, e.g. "15% off".
+    covers: ["promotion"]
+    aliases: [offer, discount]
+  - name: start_date
+    type: date
+    required: true
+    description: Campaign start date (YYYY-MM-DD).
+    covers: ["dates"]
+    aliases: [start, from]
+  - name: end_date
+    type: date
+    required: true
+    description: Campaign end date (YYYY-MM-DD).
+    covers: ["dates"]
+    aliases: [end, to, until]
+
+tool_map:
+  "LLM": [content_generator]
+  "product data reader": [product_data_reader]
+
+steps:
+  - id: validate_inputs
+    name: Validate inputs
+    excel_step: Validate inputs
+    tool: field_validator
+    params:
+      values:
+        campaign_goal: "=inputs.campaign_goal"
+        products: "=inputs.products"
+        start_date: "=inputs.start_date"
+        end_date: "=inputs.end_date"
+        target_audience: "=inputs.target_audience"
+        promotion: "=inputs.promotion"
+      required: [campaign_goal, products, start_date, end_date]
+      expected: [target_audience, promotion]
+
+  - id: required_inputs_present
+    name: Goal and dates present?
+    excel_step: Validate inputs
+    description: "Excel rule: if the campaign goal or dates are missing, request them before generating the brief."
+    kind: decision
+    cases:
+      - label: Required information missing
+        when: "not steps.validate_inputs.is_valid"
+        then:
+          type: await_input
+          missing: "=steps.validate_inputs.missing_required"
+          message: "Before I can write the brief I need: {{ join(steps.validate_inputs.missing_required, ', ') }}."
+      - label: End date before start date
+        when: "inputs.end_date < inputs.start_date"
+        then:
+          type: await_input
+          missing: [end_date]
+          message: "The end date ({{ inputs.end_date }}) is before the start date ({{ inputs.start_date }}). Please give the correct dates."
+      - label: All required information present
+        then: {type: continue, message: "Goal, products and dates are present."}
+
+  - id: identify_objective
+    name: Identify campaign objective
+    excel_step: identify campaign objective
+    tool: content_generator
+    params:
+      task: campaign_objective
+      facts:
+        goal: "=inputs.campaign_goal"
+        promotion: "=inputs.promotion"
+        target_audience: "=inputs.target_audience"
+
+  - id: load_products
+    name: Look up products
+    excel_step: summarize products
+    tool: product_data_reader
+    params:
+      selectors: "=inputs.products"
+
+  - id: products_found
+    name: Products found?
+    excel_step: summarize products
+    kind: decision
+    cases:
+      - label: None of the products found
+        when: "steps.load_products.count == 0"
+        then:
+          type: await_input
+          missing: [products]
+          message: "I could not find any of these in the catalog: {{ join(inputs.products, ', ') }}. Please give SKUs, product names or a collection name that exists."
+      - label: Products found
+        then: {type: continue, message: "{{ steps.load_products.count }} product(s) found."}
+
+  - id: summarize_products
+    name: Summarize products
+    excel_step: summarize products
+    tool: table_query
+    params:
+      rows: "=steps.load_products.products"
+      derive:
+        summary: "row.product_name + ' (' + row.sku + ')' + iff(is_blank(row.price), '', ' - ' + str(row.price))"
+      select: [sku, product_name, category, price, collection, summary]
+
+  - id: create_messaging
+    name: Create messaging
+    excel_step: create messaging
+    tool: content_generator
+    params:
+      task: campaign_messaging
+      facts:
+        goal: "=inputs.campaign_goal"
+        promotion: "=inputs.promotion"
+        target_audience: "=inputs.target_audience"
+        objective_type: "=steps.identify_objective.content.objective_type"
+        products: "=steps.load_products.products"
+
+  - id: recommend_channels
+    name: Create channel recommendations
+    excel_step: create channel recommendations
+    tool: content_generator
+    params:
+      task: channel_plan
+      facts:
+        goal: "=inputs.campaign_goal"
+        target_audience: "=inputs.target_audience"
+        objective_type: "=steps.identify_objective.content.objective_type"
+
+  - id: create_checklist
+    name: Create campaign checklist
+    excel_step: create campaign checklist
+    tool: content_generator
+    params:
+      task: campaign_checklist
+      facts:
+        start_date: "=inputs.start_date"
+        end_date: "=inputs.end_date"
+        promotion: "=inputs.promotion"
+        channels: "=steps.recommend_channels.content.channels"
+
+final:
+  warnings:
+    - when: "len(steps.load_products.unmatched_selectors) > 0"
+      message: "Not found in the catalog and left out: {{ join(steps.load_products.unmatched_selectors, ', ') }}."
+    - when: "steps.create_messaging.mode == 'template'"
+      message: "The objective, messaging, channels and checklist were built from the built-in templates; no language model was used."
+    - when: "len(steps.validate_inputs.missing_expected) > 0"
+      message: "Not specified (not invented): {{ join(steps.validate_inputs.missing_expected, ', ') }}."
+  outcomes:
+    completed:
+      headline: "Campaign brief ready: {{ inputs.campaign_goal }} ({{ inputs.start_date }} to {{ inputs.end_date }})"
+      result:
+        objective: "=steps.identify_objective.content.objective"
+        objective_type: "=steps.identify_objective.content.objective_type"
+        target_audience: "=coalesce(inputs.target_audience, 'Not specified')"
+        promotion: "=coalesce(inputs.promotion, 'Not specified')"
+        timeline: "=steps.create_checklist.content.timeline"
+        products: "=steps.summarize_products.rows"
+        messaging: "=steps.create_messaging.content"
+        channels: "=steps.recommend_channels.content.channels"
+        checklist: "=steps.create_checklist.content.checklist"
+        generation_modes: "=unique([steps.identify_objective.mode, steps.create_messaging.mode, steps.recommend_channels.mode, steps.create_checklist.mode])"

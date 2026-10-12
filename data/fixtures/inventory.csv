@@ -1,0 +1,23 @@
+sku,product_name,category,current_stock,minimum_stock,unit_cost,supplier
+SKU-1001,Classic Leather Belt - Black,Accessories,12,20,14.50,Northwind Leather
+SKU-1002,Classic Leather Belt - Brown,Accessories,35,20,14.50,Northwind Leather
+SKU-1003,Canvas Tote Bag - Natural,Accessories,8,15,6.80,Harbor Textiles
+SKU-1004,Wool Beanie - Charcoal,Apparel,40,25,5.20,Alpine Knits
+SKU-1005,Wool Beanie - Navy,Apparel,25,25,5.20,Alpine Knits
+SKU-1006,Trail Running Shoes - Men's 10,Footwear,6,12,38.00,Summit Footwear
+SKU-1007,Trail Running Shoes - Women's 8,Footwear,18,12,38.00,Summit Footwear
+SKU-1008,Insulated Water Bottle 750ml,Home,0,30,7.90,ClearFlow Goods
+SKU-1009,Ceramic Mug - White,Home,64,40,2.40,Kiln & Co
+SKU-1010,Bamboo Cutting Board,Home,14,10,6.10,GreenGrain
+SKU-1011,Wireless Earbuds Pro,Electronics,9,15,21.00,SoundWave
+SKU-1012,USB-C Charging Cable 2m,Electronics,120,60,1.80,SoundWave
+SKU-1013,Portable Power Bank 10000mAh,Electronics,22,20,12.60,VoltEdge
+SKU-1014,Cotton Crew T-Shirt - White (M),Apparel,48,30,3.90,Alpine Knits
+SKU-1015,Cotton Crew T-Shirt - Black (L),Apparel,11,30,3.90,Alpine Knits
+SKU-1016,Denim Jacket - Indigo (M),Apparel,5,8,29.00,Blue Loom
+SKU-1017,Yoga Mat - Purple,Home,19,15,8.40,FlexLife
+SKU-1018,Running Socks 3-Pack,Apparel,3,40,2.70,Summit Footwear
+SKU-1019,Leather Wallet - Tan,Accessories,27,18,9.30,Northwind Leather
+SKU-1020,Sunglasses - Aviator,Accessories,16,10,7.20,Shade Optics
+SKU-1021,Desk Lamp LED,Electronics,7,10,11.40,VoltEdge
+SKU-1022,Throw Blanket - Grey,Home,31,20,8.80,Harbor Textiles

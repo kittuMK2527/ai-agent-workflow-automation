@@ -1,0 +1,5003 @@
+{
+  "generated_from": [
+    "workflows.xlsx"
+  ],
+  "workbook_sha256": "581be7682eeb4d3039caaaa06595d197c103f023d7ef02d59c481ad31110f6ce",
+  "required_workflow_ids": [
+    "WF001",
+    "WF002",
+    "WF003",
+    "WF004",
+    "WF005",
+    "WF006",
+    "WF007",
+    "WF008",
+    "WF009",
+    "WF010"
+  ],
+  "workflows": [
+    {
+      "id": "WF001",
+      "name": "Inventory Restock Check",
+      "description": "User asks which products need restocking. Result: List of products requiring restock with current stock, threshold, and suggested reorder quantity",
+      "triggers": [
+        "User asks which products need restocking",
+        "Which items are running low and need to be reordered?",
+        "Show me stock that is below the minimum level",
+        "What should we reorder this week?"
+      ],
+      "routing_examples": [
+        "Which items are running low and need to be reordered?",
+        "Show me stock that is below the minimum level",
+        "What should we reorder this week?"
+      ],
+      "routing_keywords": [
+        "restock",
+        "restocking",
+        "reorder",
+        "low stock",
+        "inventory",
+        "stock level",
+        "running low",
+        "minimum stock",
+        "replenish"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question",
+          "request": "Which products need restocking?",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": "Uses each product's own minimum_stock from the inventory file."
+        },
+        {
+          "title": "Custom threshold",
+          "request": "Which products are below 15 units and need restocking?",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": "A threshold in the request overrides the per-product minimum."
+        }
+      ],
+      "inputs": [
+        {
+          "name": "inventory_file",
+          "type": "file",
+          "description": "Product inventory CSV (needs sku, product_name, current_stock and minimum_stock columns).",
+          "required": false,
+          "default": "inventory.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Product inventory CSV"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "minimum_stock",
+          "type": "number",
+          "description": "Global minimum stock threshold; overrides every product's own minimum.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "minimum stock threshold"
+          ],
+          "aliases": [
+            "threshold",
+            "minimum",
+            "below"
+          ],
+          "extract_pattern": null,
+          "example": "below 15 units"
+        },
+        {
+          "name": "restock_multiplier",
+          "type": "number",
+          "description": "Target stock as a multiple of the minimum, used to size the reorder quantity.",
+          "required": false,
+          "default": 2.0,
+          "items": "string",
+          "choices": null,
+          "minimum": 1.0,
+          "maximum": 10.0,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "load_inventory",
+          "name": "Load inventory",
+          "excel_step": "Load inventory",
+          "description": "Read the inventory CSV and convert the stock columns to numbers.",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.inventory_file",
+            "numeric_columns": [
+              "current_stock",
+              "minimum_stock"
+            ],
+            "required_columns": [
+              "sku",
+              "product_name",
+              "current_stock",
+              "minimum_stock"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.row_count > 0",
+              "message": "The inventory file contains no products.",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "compare_stock",
+          "name": "Compare stock with the minimum threshold",
+          "excel_step": "compare current stock with minimum threshold",
+          "description": "Work out the threshold that applies to each product and how far its stock is from it.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.load_inventory.rows",
+            "vars": {
+              "override": "=inputs.minimum_stock"
+            },
+            "derive": {
+              "threshold": "coalesce(vars.override, row.minimum_stock)",
+              "shortfall": "row.threshold - row.current_stock"
+            },
+            "label": "Stock versus threshold"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "identify_low_stock",
+          "name": "Identify low-stock products",
+          "excel_step": "identify low-stock products",
+          "description": "Excel rule: if current_stock < minimum_stock, mark the product for restock.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.compare_stock.rows",
+            "where": "row.current_stock < row.threshold",
+            "label": "Excel rule: current_stock < minimum_stock"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "calculate_reorder",
+          "name": "Calculate reorder quantity",
+          "excel_step": "calculate reorder quantity",
+          "description": "Target stock = threshold x multiplier; reorder quantity = target stock - current stock.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.identify_low_stock.rows",
+            "vars": {
+              "multiplier": "=inputs.restock_multiplier"
+            },
+            "derive": {
+              "target_stock": "ceil(row.threshold * vars.multiplier)",
+              "reorder_quantity": "row.target_stock - row.current_stock"
+            },
+            "label": "Reorder quantity"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "generate_restock_list",
+          "name": "Generate restock list",
+          "excel_step": "generate restock list",
+          "description": "Order the list by how far each product is below its threshold.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.calculate_reorder.rows",
+            "sort_by": [
+              "-shortfall",
+              "sku"
+            ],
+            "rank_field": "priority_rank",
+            "select": [
+              "priority_rank",
+              "sku",
+              "product_name",
+              "current_stock",
+              "threshold",
+              "reorder_quantity"
+            ],
+            "select_optional": [
+              "category",
+              "supplier"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "totals",
+          "name": "Total units to order",
+          "excel_step": "generate restock list",
+          "description": "Sum the suggested reorder quantities.",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.generate_restock_list.rows",
+            "aggregations": {
+              "total_units": {
+                "op": "sum",
+                "field": "reorder_quantity"
+              }
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "If current_stock < minimum_stock, mark product for restock",
+      "tools_required": [
+        "CSV reader",
+        "calculator"
+      ],
+      "tool_map": {
+        "CSV reader": [
+          "csv_reader"
+        ],
+        "calculator": [
+          "table_query",
+          "table_aggregate"
+        ]
+      },
+      "allowed_tools": [
+        "csv_reader",
+        "table_aggregate",
+        "table_query"
+      ],
+      "success_output": "List of products requiring restock with current stock, threshold, and suggested reorder quantity",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ iff(steps.generate_restock_list.count == 0, 'No products need restocking', str(steps.generate_restock_list.count) + ' of ' + str(steps.load_inventory.row_count) + ' products need restocking') }}",
+            "severity": "success",
+            "result": {
+              "products_checked": "=steps.load_inventory.row_count",
+              "products_to_restock": "=steps.generate_restock_list.count",
+              "total_units_to_order": "=coalesce(steps.totals.rows[0].total_units, 0)",
+              "threshold_basis": "=iff(exists(inputs.minimum_stock), 'Global threshold of ' + str(inputs.minimum_stock) + ' units', 'Per-product minimum_stock column')",
+              "reorder_rule": "=fmt('Reorder up to {} x the threshold', inputs.restock_multiplier)",
+              "restock_list": "=steps.generate_restock_list.rows"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "steps.compare_stock.error_count > 0",
+            "message": "{{ steps.compare_stock.error_count }} inventory row(s) had a missing or non-numeric stock value and were excluded from the check."
+          },
+          {
+            "when": "len(steps.load_inventory.warnings) > 0",
+            "message": "{{ join(steps.load_inventory.warnings, ' ') }}"
+          }
+        ]
+      },
+      "error_handling": [
+        "Rows with a missing or non-numeric stock value are excluded and reported as a data-quality warning; they are never counted as low or as fine.",
+        "A missing/unreadable inventory file stops the workflow with a message that names the file.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "The workbook does not say how the reorder quantity is calculated. Interpretation: target stock = minimum stock x restock_multiplier (default 2.0); suggested reorder quantity = ceil(target stock - current stock).",
+        "'minimum stock threshold' is read from each product's minimum_stock column. A threshold given in the request overrides it for every product.",
+        "The comparison is strict (current_stock < minimum_stock): a product exactly at its minimum is not flagged, as the Excel rule says '<'."
+      ],
+      "test_requests": [
+        {
+          "request": "Which products need restocking?",
+          "what_to_check": "Tests workflow selection and threshold logic"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "load_inventory",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.row_count > 0",
+          "action": null
+        },
+        {
+          "step_id": "identify_low_stock",
+          "kind": "row_rule",
+          "label": "Excel rule: current_stock < minimum_stock",
+          "expression": "row.current_stock < row.threshold",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Product inventory CSV",
+        "minimum stock threshold"
+      ],
+      "excel_steps": [
+        "Load inventory",
+        "compare current stock with minimum threshold",
+        "identify low-stock products",
+        "calculate reorder quantity",
+        "generate restock list"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 2"
+    },
+    {
+      "id": "WF002",
+      "name": "Product Price Validation",
+      "description": "User asks to validate product prices. Result: Validation report showing matched products, price differences, and exceptions",
+      "triggers": [
+        "User asks to validate product prices",
+        "Compare our prices against the vendor price list",
+        "Which products have a vendor price that is off from ours?",
+        "Check vendor prices for discrepancies"
+      ],
+      "routing_examples": [
+        "Compare our prices against the vendor price list",
+        "Which products have a vendor price that is off from ours?",
+        "Check vendor prices for discrepancies"
+      ],
+      "routing_keywords": [
+        "price",
+        "prices",
+        "vendor price",
+        "price difference",
+        "validate prices",
+        "price check",
+        "discrepancy",
+        "mismatch",
+        "differs"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question",
+          "request": "Find products where vendor price differs by more than 10%.",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Stricter threshold",
+          "request": "Find products where vendor price differs by more than 5%.",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "products_file",
+          "type": "file",
+          "description": "Internal product CSV (sku, price).",
+          "required": false,
+          "default": "products.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Product CSV"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "vendor_prices_file",
+          "type": "file",
+          "description": "Vendor price list CSV (sku, vendor_price).",
+          "required": false,
+          "default": "vendor_prices.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "vendor price list"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "threshold_pct",
+          "type": "number",
+          "description": "Flag products whose price difference is larger than this percentage.",
+          "required": false,
+          "default": 10,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": 1000.0,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [
+            "threshold",
+            "percent",
+            "percentage",
+            "differs by more than"
+          ],
+          "extract_pattern": null,
+          "example": "more than 10%"
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "load_products",
+          "name": "Load internal prices",
+          "excel_step": "Load product prices",
+          "description": "",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.products_file",
+            "numeric_columns": [
+              "price"
+            ],
+            "required_columns": [
+              "sku",
+              "price"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "load_vendor_prices",
+          "name": "Load vendor prices",
+          "excel_step": "Load product prices",
+          "description": "",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.vendor_prices_file",
+            "numeric_columns": [
+              "vendor_price"
+            ],
+            "required_columns": [
+              "sku",
+              "vendor_price"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "match_by_sku",
+          "name": "Match products by SKU",
+          "excel_step": "match products by SKU",
+          "description": "Join the two lists on SKU, ignoring case and punctuation (sku-1006 matches SKU-1006).",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.load_products.rows",
+            "right": "=steps.load_vendor_prices.rows",
+            "left_key": "sku",
+            "right_key": "sku",
+            "how": "inner",
+            "right_suffix": "vendor"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "compare_prices",
+          "name": "Compare internal and vendor prices",
+          "excel_step": "compare internal and vendor prices",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.match_by_sku.rows",
+            "derive": {
+              "price_difference": "round(row.vendor_price - row.price, 2)"
+            },
+            "label": "Price difference"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "calculate_percentage",
+          "name": "Calculate percentage difference",
+          "excel_step": "calculate percentage difference",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.compare_prices.rows",
+            "derive": {
+              "pct_difference": "round(row.price_difference / row.price * 100, 2)"
+            },
+            "label": "Percentage difference"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "flag_exceptions",
+          "name": "Flag price exceptions",
+          "excel_step": "flag exceptions",
+          "description": "Excel rule: flag when the price difference exceeds 10%.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.calculate_percentage.rows",
+            "vars": {
+              "threshold": "=inputs.threshold_pct"
+            },
+            "derive": {
+              "abs_pct_difference": "abs(row.pct_difference)",
+              "is_exception": "row.abs_pct_difference > vars.threshold"
+            },
+            "label": "Excel rule: price difference exceeds threshold"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "list_exceptions",
+          "name": "List exceptions",
+          "excel_step": "flag exceptions",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.flag_exceptions.rows",
+            "where": "row.is_exception",
+            "sort_by": [
+              "-abs_pct_difference",
+              "sku"
+            ],
+            "select": [
+              "sku",
+              "price",
+              "vendor_price",
+              "price_difference",
+              "pct_difference"
+            ],
+            "select_optional": [
+              "product_name",
+              "vendor_name"
+            ],
+            "label": "Exceptions only"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Flag when price difference exceeds 10%",
+      "tools_required": [
+        "CSV reader",
+        "calculator"
+      ],
+      "tool_map": {
+        "CSV reader": [
+          "csv_reader"
+        ],
+        "calculator": [
+          "table_query",
+          "table_join"
+        ]
+      },
+      "allowed_tools": [
+        "csv_reader",
+        "table_join",
+        "table_query"
+      ],
+      "success_output": "Validation report showing matched products, price differences, and exceptions",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ steps.list_exceptions.count }} of {{ steps.match_by_sku.count }} matched products differ by more than {{ inputs.threshold_pct }}%",
+            "severity": "success",
+            "result": {
+              "matched_products": "=steps.match_by_sku.count",
+              "exceptions_found": "=steps.list_exceptions.count",
+              "threshold_pct": "=inputs.threshold_pct",
+              "exceptions": "=steps.list_exceptions.rows",
+              "all_comparisons": "=steps.flag_exceptions.rows",
+              "internal_only_skus": "=steps.match_by_sku.unmatched_left",
+              "vendor_only_skus": "=steps.match_by_sku.unmatched_right"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "steps.match_by_sku.unmatched_left_count + steps.match_by_sku.unmatched_right_count > 0",
+            "message": "{{ steps.match_by_sku.unmatched_left_count }} internal product(s) have no vendor price and {{ steps.match_by_sku.unmatched_right_count }} vendor SKU(s) have no internal product; they were not compared."
+          },
+          {
+            "when": "steps.compare_prices.error_count + steps.calculate_percentage.error_count > 0",
+            "message": "Some matched rows had missing or zero prices and could not be compared."
+          }
+        ]
+      },
+      "error_handling": [
+        "Rows whose prices are missing, non-numeric or zero cannot be compared; they are excluded and reported.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Percentage difference = (vendor price - internal price) / internal price x 100, so the internal price is the base. The sign shows the direction (positive = vendor is higher).",
+        "'Exceeds 10%' is applied to the absolute difference and is strict: exactly 10.00% is not flagged. The percentage is rounded to 2 decimals before the comparison so floating-point noise cannot flip the result.",
+        "The 10% threshold comes from the Excel decision logic; a different threshold in the request overrides it (threshold_pct).",
+        "Products present in only one of the two files are reported as unmatched, not silently dropped."
+      ],
+      "test_requests": [
+        {
+          "request": "Find products where vendor price differs by more than 10%.",
+          "what_to_check": "Tests comparison and decision logic"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "list_exceptions",
+          "kind": "row_rule",
+          "label": "Exceptions only",
+          "expression": "row.is_exception",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Product CSV",
+        "vendor price list"
+      ],
+      "excel_steps": [
+        "Load product prices",
+        "match products by SKU",
+        "compare internal and vendor prices",
+        "calculate percentage difference",
+        "flag exceptions"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 3"
+    },
+    {
+      "id": "WF003",
+      "name": "Vendor File Processing",
+      "description": "User provides a vendor file for processing. Result: Cleaned file plus validation summary and invalid-row report",
+      "triggers": [
+        "User provides a vendor file for processing",
+        "Clean up this vendor spreadsheet",
+        "Validate the supplier product file I uploaded",
+        "Process the vendor catalogue and tell me which rows are bad"
+      ],
+      "routing_examples": [
+        "Clean up this vendor spreadsheet",
+        "Validate the supplier product file I uploaded",
+        "Process the vendor catalogue and tell me which rows are bad"
+      ],
+      "routing_keywords": [
+        "vendor file",
+        "vendor spreadsheet",
+        "supplier file",
+        "vendor data",
+        "invalid rows",
+        "clean file",
+        "process vendor",
+        "upload",
+        "spreadsheet"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question, with the sample CSV attached",
+          "request": "Process this vendor spreadsheet and show invalid rows.",
+          "attachments": [
+            "vendor_file_sample.csv"
+          ],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Same request with an XLSX file attached",
+          "request": "Process this vendor spreadsheet and show invalid rows.",
+          "attachments": [
+            "vendor_file_sample.xlsx"
+          ],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Excel test question with no file (asks for it)",
+          "request": "Process this vendor spreadsheet and show invalid rows.",
+          "attachments": [],
+          "expect_state": "needs_input",
+          "note": "No file is attached, so the agent asks for one instead of inventing data."
+        }
+      ],
+      "inputs": [
+        {
+          "name": "vendor_file",
+          "type": "file",
+          "description": "Vendor CSV or XLSX file (attach it or name a sample file).",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "CSV/XLSX file containing vendor product data"
+          ],
+          "aliases": [
+            "file",
+            "spreadsheet",
+            "attachment"
+          ],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "read_file",
+          "name": "Read file",
+          "excel_step": "Read file",
+          "description": "",
+          "kind": "tool",
+          "tool": "file_parser",
+          "params": {
+            "source": "=inputs.vendor_file"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.row_count > 0",
+              "message": "The file has a header but no data rows.",
+              "category": "user_correctable"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "detect_columns",
+          "name": "Detect columns",
+          "excel_step": "detect columns",
+          "description": "Match the file's headers to canonical columns using synonym lists.",
+          "kind": "tool",
+          "tool": "detect_columns",
+          "params": {
+            "headers": "=steps.read_file.columns",
+            "targets": {
+              "sku": [
+                "item code",
+                "product code",
+                "part number",
+                "sku code",
+                "item number",
+                "article number",
+                "vendor sku",
+                "style number"
+              ],
+              "product_name": [
+                "product title",
+                "name",
+                "item name",
+                "title",
+                "product",
+                "item description"
+              ],
+              "price": [
+                "unit price",
+                "cost",
+                "wholesale price",
+                "vendor price",
+                "cost price"
+              ],
+              "quantity": [
+                "qty",
+                "qty on hand",
+                "stock",
+                "quantity on hand",
+                "on hand",
+                "units"
+              ],
+              "brand": [
+                "manufacturer",
+                "make"
+              ],
+              "category": [
+                "department",
+                "product category",
+                "group"
+              ]
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "normalize_columns",
+          "name": "Normalize column names",
+          "excel_step": "normalize column names",
+          "description": "",
+          "kind": "tool",
+          "tool": "normalize_columns",
+          "params": {
+            "rows": "=steps.read_file.rows",
+            "mapping": "=steps.detect_columns.mapping"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "required_fields_present",
+          "name": "Required columns present?",
+          "excel_step": "validate required fields",
+          "description": "The SKU and product-name columns must exist before rows can be validated.",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "SKU or product-name column not found",
+              "when": "not (exists(steps.detect_columns.detected.sku) and exists(steps.detect_columns.detected.product_name))",
+              "then": {
+                "type": "fail",
+                "target": null,
+                "message": "The file has no recognisable column for: {{ join(steps.detect_columns.missing_targets, ', ') }}. Columns found: {{ join(steps.read_file.columns, ', ') }}. Rename a header to 'SKU' / 'Product Name' (or e.g. 'Item Code' / 'Product Title') and try again.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Required columns found",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "SKU and product-name columns detected.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "identify_invalid_rows",
+          "name": "Identify invalid rows",
+          "excel_step": "identify invalid rows",
+          "description": "Excel rule: rows missing SKU or product name are invalid.",
+          "kind": "tool",
+          "tool": "data_validator",
+          "params": {
+            "rows": "=steps.normalize_columns.rows",
+            "required_columns": [
+              "sku",
+              "product_name"
+            ],
+            "rules": [
+              {
+                "id": "missing_sku",
+                "description": "SKU is missing",
+                "invalid_when": "is_blank(row.sku)"
+              },
+              {
+                "id": "missing_product_name",
+                "description": "Product name is missing",
+                "invalid_when": "is_blank(row.product_name)"
+              }
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "export_cleaned",
+          "name": "Export cleaned dataset",
+          "excel_step": "produce cleaned dataset",
+          "description": "",
+          "kind": "tool",
+          "tool": "dataset_exporter",
+          "params": {
+            "rows": "=steps.identify_invalid_rows.valid_rows",
+            "name": "vendor_cleaned"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "build_invalid_report",
+          "name": "Build invalid-row report",
+          "excel_step": "produce cleaned dataset",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.identify_invalid_rows.invalid_rows",
+            "derive": {
+              "source_row": "row.row_number",
+              "problems": "join(row.reasons, '; ')",
+              "sku": "get(row.row, 'sku')",
+              "product_name": "get(row.row, 'product_name')"
+            },
+            "select": [
+              "source_row",
+              "problems",
+              "sku",
+              "product_name"
+            ]
+          },
+          "when": "steps.identify_invalid_rows.invalid_count > 0",
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "export_invalid_report",
+          "name": "Export invalid-row report",
+          "excel_step": "produce cleaned dataset",
+          "description": "",
+          "kind": "tool",
+          "tool": "dataset_exporter",
+          "params": {
+            "rows": "=steps.build_invalid_report.rows",
+            "name": "vendor_invalid_rows"
+          },
+          "when": "steps.identify_invalid_rows.invalid_count > 0",
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Rows missing SKU or product name are invalid",
+      "tools_required": [
+        "Excel/CSV parser",
+        "data validation"
+      ],
+      "tool_map": {
+        "Excel/CSV parser": [
+          "file_parser",
+          "detect_columns",
+          "normalize_columns",
+          "dataset_exporter"
+        ],
+        "data validation": [
+          "data_validator"
+        ]
+      },
+      "allowed_tools": [
+        "data_validator",
+        "dataset_exporter",
+        "detect_columns",
+        "file_parser",
+        "normalize_columns"
+      ],
+      "success_output": "Cleaned file plus validation summary and invalid-row report",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ steps.identify_invalid_rows.valid_count }} of {{ steps.identify_invalid_rows.total }} rows are valid; {{ steps.identify_invalid_rows.invalid_count }} invalid",
+            "severity": "success",
+            "result": {
+              "validation_summary": {
+                "total_rows": "=steps.identify_invalid_rows.total",
+                "valid_rows": "=steps.identify_invalid_rows.valid_count",
+                "invalid_rows": "=steps.identify_invalid_rows.invalid_count",
+                "problems_by_rule": "=steps.identify_invalid_rows.by_rule"
+              },
+              "detected_columns": "=steps.detect_columns.detected",
+              "invalid_row_report": "=coalesce(steps.build_invalid_report.rows, [])",
+              "cleaned_file": "=steps.export_cleaned.path",
+              "invalid_report_file": "=coalesce(steps.export_invalid_report.path, 'none (no invalid rows)')",
+              "cleaned_dataset": "=steps.identify_invalid_rows.valid_rows"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "len(steps.read_file.warnings) > 0",
+            "message": "{{ join(steps.read_file.warnings, ' ') }}"
+          },
+          {
+            "when": "len(steps.detect_columns.unmapped_headers) > 0",
+            "message": "Columns kept but not recognised as standard fields: {{ join(steps.detect_columns.unmapped_headers, ', ') }}."
+          }
+        ]
+      },
+      "error_handling": [
+        "If the file has no recognisable SKU or product-name column the workflow stops with a user-correctable message listing the accepted header names; no rows are guessed.",
+        "Unreadable, empty or oversized files stop the workflow with a clear message.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "The workbook requires a SKU and a product name. Header names vary between vendors, so columns are detected from synonym lists (this file) and renamed to canonical names: sku, product_name, price, quantity, brand, category.",
+        "'description' is deliberately NOT accepted as a synonym for product name: in vendor files it usually holds long marketing text.",
+        "Cleaning = renamed columns, trimmed whitespace, invalid rows removed. Values such as prices are not rewritten.",
+        "A row is invalid when its SKU or its product name is blank (Excel decision logic). Both reasons are reported when both apply."
+      ],
+      "test_requests": [
+        {
+          "request": "Process this vendor spreadsheet and show invalid rows.",
+          "what_to_check": "Tests file ingestion and validation"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "read_file",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.row_count > 0",
+          "action": null
+        },
+        {
+          "step_id": "required_fields_present",
+          "kind": "decision_case",
+          "label": "SKU or product-name column not found",
+          "expression": "not (exists(steps.detect_columns.detected.sku) and exists(steps.detect_columns.detected.product_name))",
+          "action": "fail"
+        },
+        {
+          "step_id": "required_fields_present",
+          "kind": "decision_case",
+          "label": "Required columns found",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "identify_invalid_rows",
+          "kind": "row_rule",
+          "label": "Identify invalid rows",
+          "expression": "is_blank(row.sku)",
+          "action": null
+        },
+        {
+          "step_id": "identify_invalid_rows",
+          "kind": "row_rule",
+          "label": "Identify invalid rows",
+          "expression": "is_blank(row.product_name)",
+          "action": null
+        },
+        {
+          "step_id": "build_invalid_report",
+          "kind": "guard",
+          "label": "Run 'Build invalid-row report' only if",
+          "expression": "steps.identify_invalid_rows.invalid_count > 0",
+          "action": null
+        },
+        {
+          "step_id": "export_invalid_report",
+          "kind": "guard",
+          "label": "Run 'Export invalid-row report' only if",
+          "expression": "steps.identify_invalid_rows.invalid_count > 0",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "CSV/XLSX file containing vendor product data"
+      ],
+      "excel_steps": [
+        "Read file",
+        "detect columns",
+        "normalize column names",
+        "validate required fields",
+        "identify invalid rows",
+        "produce cleaned dataset"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 4"
+    },
+    {
+      "id": "WF004",
+      "name": "Product Description Generator",
+      "description": "User asks to generate product content. Result: Product description, short description, SEO title, and meta description",
+      "triggers": [
+        "User asks to generate product content",
+        "Write a description and SEO title for this product",
+        "Create product copy for our new item",
+        "Generate a meta description and short description for a product"
+      ],
+      "routing_examples": [
+        "Write a description and SEO title for this product",
+        "Create product copy for our new item",
+        "Generate a meta description and short description for a product"
+      ],
+      "routing_keywords": [
+        "product description",
+        "seo content",
+        "seo title",
+        "meta description",
+        "short description",
+        "product copy",
+        "generate content",
+        "write description"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Full product details",
+          "request": "Generate SEO content for the Trail Water Bottle. Category: Outdoor; material: stainless steel; color: green; target audience: hikers; attributes: leak-proof, vacuum insulated",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Some attributes missing (marked, not invented)",
+          "request": "Generate SEO content for the Canvas Tote Bag. Category: Accessories; material: cotton",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Excel test question (asks which product)",
+          "request": "Generate SEO content for this product.",
+          "attachments": [],
+          "expect_state": "needs_input",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "product_name",
+          "type": "string",
+          "description": "Name of the product to write about.",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Product name"
+          ],
+          "aliases": [
+            "product",
+            "name",
+            "item"
+          ],
+          "extract_pattern": "(?i)\\b(?:for|about)\\s+(?:(?:the|our|this|a|an)\\s+)?([A-Za-z0-9][^.;:\\n]*?)(?=\\s+(?:in|made|using|with|aimed|targeting)\\b|[.;:\\n]|$)",
+          "example": null
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "description": "Product category, e.g. Accessories.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "category"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "attributes",
+          "type": "list",
+          "description": "Key features or attributes, e.g. waterproof, lightweight.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "attributes"
+          ],
+          "aliases": [
+            "features",
+            "attribute"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "material",
+          "type": "string",
+          "description": "Material the product is made from.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "material"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "color",
+          "type": "string",
+          "description": "Product colour.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "color"
+          ],
+          "aliases": [
+            "colour"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "target_audience",
+          "type": "string",
+          "description": "Who the product is for.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "target audience"
+          ],
+          "aliases": [
+            "audience",
+            "customers"
+          ],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "validate_attributes",
+          "name": "Validate required attributes",
+          "excel_step": "Validate required attributes",
+          "description": "",
+          "kind": "tool",
+          "tool": "field_validator",
+          "params": {
+            "values": {
+              "product_name": "=inputs.product_name",
+              "category": "=inputs.category",
+              "attributes": "=inputs.attributes",
+              "material": "=inputs.material",
+              "color": "=inputs.color",
+              "target_audience": "=inputs.target_audience"
+            },
+            "required": [
+              "product_name"
+            ],
+            "expected": [
+              "category",
+              "attributes",
+              "material",
+              "color",
+              "target_audience"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "missing_information_policy",
+          "name": "Missing attributes?",
+          "excel_step": "Validate required attributes",
+          "description": "Excel rule: do not invent missing attributes; mark them explicitly.",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "Product name missing",
+              "when": "not steps.validate_attributes.is_valid",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "Which product should I write content for? Please give at least the product name.",
+                "missing": [
+                  "product_name"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Some expected attributes are missing",
+              "when": "len(steps.validate_attributes.missing_expected) > 0",
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "Not provided: {{ join(steps.validate_attributes.missing_expected, ', ') }}. They are marked as missing and left out of the copy instead of being guessed.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "All attributes provided",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "All expected attributes were provided.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "write_description",
+          "name": "Create product description",
+          "excel_step": "create product description",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "product_description",
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "check_description",
+          "name": "Validate description",
+          "excel_step": "create product description",
+          "description": "",
+          "kind": "tool",
+          "tool": "text_validator",
+          "params": {
+            "text": "=steps.write_description.content.text",
+            "field": "description",
+            "min_length": 20,
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.valid",
+              "message": "The generated description failed validation: {{ join(output.issues, '; ') }}",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "write_short_description",
+          "name": "Generate short description",
+          "excel_step": "generate short description",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "short_description",
+            "facts": "=steps.validate_attributes.present",
+            "context": {
+              "description": "=steps.write_description.content.text"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "check_short_description",
+          "name": "Validate short description",
+          "excel_step": "generate short description",
+          "description": "",
+          "kind": "tool",
+          "tool": "text_validator",
+          "params": {
+            "text": "=steps.write_short_description.content.text",
+            "field": "short_description",
+            "max_length": 120,
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.valid",
+              "message": "The generated short description failed validation: {{ join(output.issues, '; ') }}",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "write_seo_title",
+          "name": "Generate SEO title",
+          "excel_step": "generate SEO title",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "seo_title",
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "check_seo_title",
+          "name": "Validate SEO title",
+          "excel_step": "generate SEO title",
+          "description": "",
+          "kind": "tool",
+          "tool": "text_validator",
+          "params": {
+            "text": "=steps.write_seo_title.content.text",
+            "field": "seo_title",
+            "max_length": 60,
+            "required_terms": [
+              "=iff(len(inputs.product_name) <= 50, inputs.product_name, '')"
+            ],
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.valid",
+              "message": "The generated SEO title failed validation: {{ join(output.issues, '; ') }}",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "write_meta_description",
+          "name": "Generate meta description",
+          "excel_step": "generate meta description",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "meta_description",
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "check_meta_description",
+          "name": "Validate meta description",
+          "excel_step": "generate meta description",
+          "description": "",
+          "kind": "tool",
+          "tool": "text_validator",
+          "params": {
+            "text": "=steps.write_meta_description.content.text",
+            "field": "meta_description",
+            "min_length": 30,
+            "max_length": 160,
+            "facts": "=steps.validate_attributes.present"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.valid",
+              "message": "The generated meta description failed validation: {{ join(output.issues, '; ') }}",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Do not invent missing product attributes; explicitly mark missing information",
+      "tools_required": [
+        "LLM",
+        "text validation"
+      ],
+      "tool_map": {
+        "LLM": [
+          "content_generator"
+        ],
+        "text validation": [
+          "text_validator"
+        ]
+      },
+      "allowed_tools": [
+        "content_generator",
+        "text_validator"
+      ],
+      "success_output": "Product description, short description, SEO title, and meta description",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "Content generated for {{ inputs.product_name }}",
+            "severity": "success",
+            "result": {
+              "product_name": "=inputs.product_name",
+              "description": "=steps.write_description.content.text",
+              "short_description": "=steps.write_short_description.content.text",
+              "seo_title": "=steps.write_seo_title.content.text",
+              "meta_description": "=steps.write_meta_description.content.text",
+              "missing_information": "=steps.validate_attributes.missing_expected",
+              "attributes_used": "=steps.validate_attributes.present",
+              "generation_modes": "=unique([steps.write_description.mode, steps.write_short_description.mode, steps.write_seo_title.mode, steps.write_meta_description.mode])",
+              "character_counts": {
+                "short_description": "=steps.check_short_description.length",
+                "seo_title": "=steps.check_seo_title.length",
+                "meta_description": "=steps.check_meta_description.length"
+              }
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "len(steps.validate_attributes.missing_expected) > 0",
+            "message": "Not provided, so not mentioned in the copy: {{ join(steps.validate_attributes.missing_expected, ', ') }}."
+          },
+          {
+            "when": "steps.write_description.mode == 'template'",
+            "message": "This text was built from the built-in template; no language model was used."
+          }
+        ]
+      },
+      "error_handling": [
+        "LLM timeouts/rate limits are retried (bounded) in strict LLM mode; in auto mode the labelled template is used instead.",
+        "Generated text that fails validation fails the workflow with the validator's reasons.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Product name is the only hard-required input: without it there is nothing to write about. Category, attributes, material, colour and target audience are 'expected' attributes.",
+        "Excel decision logic: 'Do not invent missing product attributes; explicitly mark missing information'. Missing expected attributes do NOT block the workflow; they are listed under missing_information, the copy leaves them out, and a warning is shown.",
+        "Each generated text is checked by the text validator (length limits, product name in the SEO title, and no colour/material words that are not in the supplied facts). A failed check fails the workflow rather than returning unchecked copy.",
+        "The text is produced by the LLM when one is configured, otherwise by a labelled built-in template; the result states which."
+      ],
+      "test_requests": [
+        {
+          "request": "Generate SEO content for this product.",
+          "what_to_check": "Tests LLM workflow and missing-data handling"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "missing_information_policy",
+          "kind": "decision_case",
+          "label": "Product name missing",
+          "expression": "not steps.validate_attributes.is_valid",
+          "action": "await_input"
+        },
+        {
+          "step_id": "missing_information_policy",
+          "kind": "decision_case",
+          "label": "Some expected attributes are missing",
+          "expression": "len(steps.validate_attributes.missing_expected) > 0",
+          "action": "continue"
+        },
+        {
+          "step_id": "missing_information_policy",
+          "kind": "decision_case",
+          "label": "All attributes provided",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "check_description",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.valid",
+          "action": null
+        },
+        {
+          "step_id": "check_short_description",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.valid",
+          "action": null
+        },
+        {
+          "step_id": "check_seo_title",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.valid",
+          "action": null
+        },
+        {
+          "step_id": "check_meta_description",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.valid",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Product name",
+        "category",
+        "attributes",
+        "material",
+        "color",
+        "target audience"
+      ],
+      "excel_steps": [
+        "Validate required attributes",
+        "create product description",
+        "generate short description",
+        "generate SEO title",
+        "generate meta description"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 5"
+    },
+    {
+      "id": "WF005",
+      "name": "Customer Order Status",
+      "description": "User asks for an order status. Result: Order status, items, shipment status, and tracking information when available",
+      "triggers": [
+        "User asks for an order status",
+        "Has order ORD-1002 been delivered?",
+        "What is the tracking status of my order?",
+        "Check the shipment for alex.morgan@example.com"
+      ],
+      "routing_examples": [
+        "Has order ORD-1002 been delivered?",
+        "What is the tracking status of my order?",
+        "Check the shipment for alex.morgan@example.com"
+      ],
+      "routing_keywords": [
+        "order",
+        "order status",
+        "where is",
+        "tracking",
+        "shipment",
+        "shipped",
+        "delivery",
+        "delivered",
+        "track"
+      ],
+      "routing_patterns": [
+        "(?i)\\bORD[-\\s]?\\d{3,8}\\b",
+        "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9\\-]+(\\.[A-Za-z0-9\\-]+)*\\.[A-Za-z]{2,}"
+      ],
+      "examples": [
+        {
+          "title": "Excel test question",
+          "request": "Where is order ORD-1001?",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Order that is not found (asks for another identifier)",
+          "request": "Where is order ORD-9999?",
+          "attachments": [],
+          "expect_state": "needs_input",
+          "note": ""
+        },
+        {
+          "title": "Lookup by customer email (two orders)",
+          "request": "Check the orders for alex.morgan@example.com",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "identifier",
+          "type": "string",
+          "description": "Order ID (like ORD-1001) or the customer's email address.",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": true,
+          "expose": true,
+          "covers": [
+            "Order ID or customer email"
+          ],
+          "aliases": [
+            "order",
+            "order id",
+            "email",
+            "order number"
+          ],
+          "extract_pattern": "(?i)\\bORD[-\\s]?\\d{3,8}\\b|[A-Za-z0-9._%+\\-]+@[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)*\\.[A-Za-z]{2,}",
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "validate_identifier",
+          "name": "Validate identifier",
+          "excel_step": "Validate identifier",
+          "description": "",
+          "kind": "tool",
+          "tool": "identifier_validator",
+          "params": {
+            "identifier": "=inputs.identifier"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "identifier_is_valid",
+          "name": "Identifier valid?",
+          "excel_step": "Validate identifier",
+          "description": "",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "Not an order ID or email",
+              "when": "not steps.validate_identifier.valid",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "'{{ inputs.identifier }}' is not a valid order ID (like ORD-1001) or email address. Please provide one of those.",
+                "missing": [
+                  "identifier"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Valid identifier",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "Recognised as {{ steps.validate_identifier.kind }}.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "search_orders",
+          "name": "Search order data",
+          "excel_step": "search order data",
+          "description": "",
+          "kind": "tool",
+          "tool": "order_search",
+          "params": {
+            "kind": "=steps.validate_identifier.kind",
+            "value": "=steps.validate_identifier.normalized"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "order_found",
+          "name": "Order found?",
+          "excel_step": "search order data",
+          "description": "Excel rule: if no order is found, ask for another identifier.",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "No order found",
+              "when": "steps.search_orders.count == 0",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "No order was found for {{ steps.validate_identifier.normalized }}. Please provide another order ID or the email address used at checkout.",
+                "missing": [
+                  "identifier"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Order(s) found",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "{{ steps.search_orders.count }} order(s) found.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "get_order_status",
+          "name": "Retrieve order status",
+          "excel_step": "retrieve order status",
+          "description": "",
+          "kind": "tool",
+          "tool": "order_details",
+          "params": {
+            "order_ids": "=steps.search_orders.order_ids"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.count > 0",
+              "message": "The order system returned no details for the matched order(s).",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "lookup_shipments",
+          "name": "Retrieve shipment information",
+          "excel_step": "retrieve shipment information",
+          "description": "Not essential for the status itself, so a persistent outage yields a partial result.",
+          "kind": "tool",
+          "tool": "shipment_lookup",
+          "params": {
+            "order_ids": "=steps.search_orders.order_ids"
+          },
+          "when": null,
+          "on_failure": "continue",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "combine_order_and_shipment",
+          "name": "Combine order and shipment data",
+          "excel_step": "summarize current status",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.get_order_status.orders",
+            "right": "=coalesce(steps.lookup_shipments.shipments, [])",
+            "left_key": "order_id",
+            "right_key": "order_id",
+            "how": "left",
+            "right_fields": [
+              "carrier",
+              "tracking_number",
+              "shipment_status",
+              "eta",
+              "last_update"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "summarize_status",
+          "name": "Summarize current status",
+          "excel_step": "summarize current status",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.combine_order_and_shipment.rows",
+            "derive": {
+              "shipment_summary": "iff(is_blank(row.tracking_number), 'No shipment information yet', row.carrier + ' - ' + row.shipment_status + ' (tracking ' + row.tracking_number + ', ETA ' + str(row.eta) + ')')",
+              "summary": "'Order ' + row.order_id + ' is ' + row.status + '. ' + row.shipment_summary + '.'"
+            },
+            "select": [
+              "order_id",
+              "status",
+              "order_date",
+              "items",
+              "total",
+              "shipment_status",
+              "carrier",
+              "tracking_number",
+              "eta",
+              "last_update",
+              "summary"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "If no order is found, ask for another identifier",
+      "tools_required": [
+        "Order database/API",
+        "shipment lookup"
+      ],
+      "tool_map": {
+        "Order database/API": [
+          "identifier_validator",
+          "order_search",
+          "order_details"
+        ],
+        "shipment lookup": [
+          "shipment_lookup"
+        ]
+      },
+      "allowed_tools": [
+        "identifier_validator",
+        "order_details",
+        "order_search",
+        "shipment_lookup"
+      ],
+      "success_output": "Order status, items, shipment status, and tracking information when available",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ iff(steps.summarize_status.count == 1, steps.summarize_status.rows[0].summary, str(steps.summarize_status.count) + ' orders found for ' + steps.validate_identifier.normalized) }}",
+            "severity": "success",
+            "result": {
+              "orders": "=steps.summarize_status.rows",
+              "order_count": "=steps.summarize_status.count",
+              "shipment_lookup_available": "=exists(steps.lookup_shipments)",
+              "data_source": "SIMULATED order system and carrier API (fixture data, not a live system)"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "not exists(steps.lookup_shipments)",
+            "message": "Shipment tracking is temporarily unavailable, so the order status is shown without shipment details. Try again shortly."
+          }
+        ]
+      },
+      "error_handling": [
+        "Order search / details: transient errors are retried up to 3 times; then the workflow fails.",
+        "Shipment lookup: transient errors are retried up to 3 times; then the step is marked failed and the workflow continues (partial result).",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "The identifier is an order ID (ORD-1001, case/hyphen tolerant) or an email address. An email can match several orders; all are returned.",
+        "Excel decision logic: 'If no order is found, ask for another identifier'. This pauses the workflow in an 'awaiting input' state and asks for a new identifier instead of failing or guessing.",
+        "The order system and shipment lookup are SIMULATED (fixture data). Every result is labelled simulated.",
+        "Shipment lookup is not essential to know the order status, so if the (simulated) shipment service stays unavailable after retries the workflow still returns the order status and finishes as PARTIAL with a warning."
+      ],
+      "test_requests": [
+        {
+          "request": "Where is order ORD-1001?",
+          "what_to_check": "Tests lookup and missing-order handling"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "identifier_is_valid",
+          "kind": "decision_case",
+          "label": "Not an order ID or email",
+          "expression": "not steps.validate_identifier.valid",
+          "action": "await_input"
+        },
+        {
+          "step_id": "identifier_is_valid",
+          "kind": "decision_case",
+          "label": "Valid identifier",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "order_found",
+          "kind": "decision_case",
+          "label": "No order found",
+          "expression": "steps.search_orders.count == 0",
+          "action": "await_input"
+        },
+        {
+          "step_id": "order_found",
+          "kind": "decision_case",
+          "label": "Order(s) found",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "get_order_status",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.count > 0",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Order ID or customer email"
+      ],
+      "excel_steps": [
+        "Validate identifier",
+        "search order data",
+        "retrieve order status",
+        "retrieve shipment information",
+        "summarize current status"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 6"
+    },
+    {
+      "id": "WF006",
+      "name": "Duplicate Product Detection",
+      "description": "User asks to find duplicate products. Result: Duplicate groups with matching fields and confidence level",
+      "triggers": [
+        "User asks to find duplicate products",
+        "Are there any duplicate listings in our catalog?",
+        "Check the product catalog for repeated or near-identical products",
+        "Which SKUs look like the same product?"
+      ],
+      "routing_examples": [
+        "Are there any duplicate listings in our catalog?",
+        "Check the product catalog for repeated or near-identical products",
+        "Which SKUs look like the same product?"
+      ],
+      "routing_keywords": [
+        "duplicate",
+        "duplicates",
+        "duplicated",
+        "same product",
+        "repeated",
+        "near identical",
+        "catalog",
+        "deduplicate",
+        "matching products"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question",
+          "request": "Find likely duplicate products in the catalog.",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "catalog_file",
+          "type": "file",
+          "description": "Product catalog CSV (sku, product_name and optional brand, category, color, size, material).",
+          "required": false,
+          "default": "catalog.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Product catalog"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "similarity_threshold",
+          "type": "number",
+          "description": "Minimum weighted similarity for a possible duplicate.",
+          "required": false,
+          "default": 0.85,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.5,
+          "maximum": 1.0,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [
+            "threshold",
+            "similarity"
+          ],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "load_products",
+          "name": "Load products",
+          "excel_step": "Load products",
+          "description": "",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.catalog_file",
+            "required_columns": [
+              "sku",
+              "product_name"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.row_count > 1",
+              "message": "At least two products are needed to look for duplicates.",
+              "category": "user_correctable"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "normalize",
+          "name": "Normalize names and SKUs",
+          "excel_step": "normalize names/SKUs",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.load_products.rows",
+            "derive": {
+              "norm_sku": "norm_code(row.sku)",
+              "norm_name": "norm_text(row.product_name)"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "compare_identifiers",
+          "name": "Compare identifiers",
+          "excel_step": "compare identifiers",
+          "description": "Excel rule: an exact SKU match is a definite duplicate.",
+          "kind": "tool",
+          "tool": "record_matcher",
+          "params": {
+            "rows": "=steps.normalize.rows",
+            "mode": "exact",
+            "exact_field": "norm_sku",
+            "id_field": "sku"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "compare_attributes",
+          "name": "Compare product attributes",
+          "excel_step": "compare product attributes",
+          "description": "Excel rule: high attribute similarity is a possible duplicate.",
+          "kind": "tool",
+          "tool": "record_matcher",
+          "params": {
+            "rows": "=steps.normalize.rows",
+            "mode": "similar",
+            "id_field": "sku",
+            "fields": [
+              {
+                "name": "product_name",
+                "method": "text",
+                "weight": 0.7
+              },
+              {
+                "name": "category",
+                "method": "exact",
+                "weight": 0.15
+              },
+              {
+                "name": "material",
+                "method": "exact",
+                "weight": 0.15
+              }
+            ],
+            "blockers": [
+              "brand",
+              "color",
+              "size"
+            ],
+            "threshold": "=inputs.similarity_threshold",
+            "exclude_pairs": "=steps.compare_identifiers.pairs"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "group_duplicates",
+          "name": "Group likely duplicates",
+          "excel_step": "group likely duplicates",
+          "description": "",
+          "kind": "tool",
+          "tool": "group_matches",
+          "params": {
+            "rows": "=steps.normalize.rows",
+            "pairs": "=concat(steps.compare_identifiers.pairs, steps.compare_attributes.pairs)",
+            "display_fields": [
+              "sku",
+              "product_name",
+              "brand",
+              "color",
+              "size"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "assign_confidence",
+          "name": "Assign confidence",
+          "excel_step": "assign confidence",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.group_duplicates.groups",
+            "derive": {
+              "confidence_score": "iff(row.match_type == 'definite', 1.0, row.min_score)",
+              "confidence_level": "iff(row.match_type == 'definite', 'definite', iff(row.min_score >= 0.95, 'high', 'medium'))",
+              "why": "iff(row.match_type == 'definite', 'Identical SKU after normalisation', 'Similar ' + join(row.matching_fields, ', ') + ' and no conflicting brand/color/size')"
+            },
+            "sort_by": [
+              "-confidence_score",
+              "group_id"
+            ],
+            "select": [
+              "group_id",
+              "match_type",
+              "confidence_level",
+              "confidence_score",
+              "size",
+              "members_text",
+              "why"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Exact SKU match is a definite duplicate; high attribute similarity is a possible duplicate",
+      "tools_required": [
+        "CSV/database reader",
+        "text similarity"
+      ],
+      "tool_map": {
+        "CSV/database reader": [
+          "csv_reader"
+        ],
+        "text similarity": [
+          "record_matcher",
+          "group_matches"
+        ]
+      },
+      "allowed_tools": [
+        "csv_reader",
+        "group_matches",
+        "record_matcher"
+      ],
+      "success_output": "Duplicate groups with matching fields and confidence level",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ iff(steps.group_duplicates.total_groups == 0, 'No duplicates found', str(steps.group_duplicates.total_groups) + ' duplicate group(s): ' + str(steps.group_duplicates.definite_count) + ' definite, ' + str(steps.group_duplicates.possible_count) + ' possible') }}",
+            "severity": "success",
+            "result": {
+              "products_checked": "=steps.load_products.row_count",
+              "definite_groups": "=steps.group_duplicates.definite_count",
+              "possible_groups": "=steps.group_duplicates.possible_count",
+              "pairs_compared": "=steps.compare_attributes.compared_pairs",
+              "pairs_skipped_for_conflicting_attributes": "=steps.compare_attributes.blocked_pairs",
+              "duplicate_groups": "=steps.assign_confidence.rows"
+            }
+          }
+        },
+        "warnings": []
+      },
+      "error_handling": [
+        "Pairwise comparison is limited to 2,000 products; a larger catalog stops the workflow with a message instead of running for a long time.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Definite duplicate (Excel): rows whose SKU is identical after normalisation (case, spaces and punctuation ignored: 'SKU-2001', 'sku2001' and 'SKU 2001' are the same SKU).",
+        "Possible duplicate (Excel: 'high attribute similarity'): the workbook does not define 'high'. Interpretation: weighted similarity >= similarity_threshold (default 0.85) over product name (text similarity, weight 0.7), category (0.15) and material (0.15).",
+        "Variants are not duplicates: if two products both have a value for brand, color or size and the values differ, the pair is excluded ('Cotton Crew T-Shirt - White (M)' vs '(L)').",
+        "Confidence: definite = 1.0; possible = lowest similarity inside the group; labelled 'high' when >= 0.95, otherwise 'medium'. Blank attribute values are treated as unknown, not as matching."
+      ],
+      "test_requests": [
+        {
+          "request": "Find likely duplicate products in the catalog.",
+          "what_to_check": "Tests similarity and confidence"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "load_products",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.row_count > 1",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Product catalog"
+      ],
+      "excel_steps": [
+        "Load products",
+        "normalize names/SKUs",
+        "compare identifiers",
+        "compare product attributes",
+        "group likely duplicates",
+        "assign confidence"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 7"
+    },
+    {
+      "id": "WF007",
+      "name": "Marketing Campaign Brief",
+      "description": "User asks to create a campaign brief. Result: Structured campaign brief with objective, audience, messaging, channels, timeline, and checklist",
+      "triggers": [
+        "User asks to create a campaign brief",
+        "Put together a marketing brief for our autumn launch",
+        "Draft a campaign plan with channels and a checklist",
+        "I need a promo brief for these products"
+      ],
+      "routing_examples": [
+        "Put together a marketing brief for our autumn launch",
+        "Draft a campaign plan with channels and a checklist",
+        "I need a promo brief for these products"
+      ],
+      "routing_keywords": [
+        "campaign",
+        "campaign brief",
+        "marketing",
+        "brief",
+        "promotion",
+        "channels",
+        "checklist",
+        "launch campaign",
+        "marketing plan"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Complete request",
+          "request": "Create a campaign brief for the Autumn 2026 collection. Goal: increase autumn collection sales; audience: outdoor enthusiasts; promotion: 15% off; from 2026-11-01 to 2026-11-30",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Excel test question (asks for goal, dates)",
+          "request": "Create a campaign brief for the new collection.",
+          "attachments": [],
+          "expect_state": "needs_input",
+          "note": "Excel rule: if the goal or dates are missing, request them before generating the brief."
+        }
+      ],
+      "inputs": [
+        {
+          "name": "campaign_goal",
+          "type": "string",
+          "description": "What the campaign should achieve, e.g. \"increase autumn collection sales\".",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Campaign goal"
+          ],
+          "aliases": [
+            "goal",
+            "objective"
+          ],
+          "extract_pattern": "(?i)\\b((?:increase|boost|drive|grow|raise|promote|launch|improve|build)\\b[^.;\\n]*?)(?=\\s+(?:from|between|starting|with|targeting|aimed|using)\\b|[.;\\n]|$)",
+          "example": null
+        },
+        {
+          "name": "products",
+          "type": "list",
+          "description": "SKUs, product names or a collection name to feature.",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "product list"
+          ],
+          "aliases": [
+            "product list",
+            "collection",
+            "skus"
+          ],
+          "extract_pattern": "(?i)\\bSKU[-\\s]?\\d{3,}\\b|\\b(?:autumn|spring|summer|winter)\\s+\\d{4}\\b",
+          "example": null
+        },
+        {
+          "name": "target_audience",
+          "type": "string",
+          "description": "Who the campaign is aimed at.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "target audience"
+          ],
+          "aliases": [
+            "audience"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "promotion",
+          "type": "string",
+          "description": "Offer or promotion, e.g. \"15% off\".",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "promotion"
+          ],
+          "aliases": [
+            "offer",
+            "discount"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "start_date",
+          "type": "date",
+          "description": "Campaign start date (YYYY-MM-DD).",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "dates"
+          ],
+          "aliases": [
+            "start",
+            "from"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "end_date",
+          "type": "date",
+          "description": "Campaign end date (YYYY-MM-DD).",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "dates"
+          ],
+          "aliases": [
+            "end",
+            "to",
+            "until"
+          ],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "validate_inputs",
+          "name": "Validate inputs",
+          "excel_step": "Validate inputs",
+          "description": "",
+          "kind": "tool",
+          "tool": "field_validator",
+          "params": {
+            "values": {
+              "campaign_goal": "=inputs.campaign_goal",
+              "products": "=inputs.products",
+              "start_date": "=inputs.start_date",
+              "end_date": "=inputs.end_date",
+              "target_audience": "=inputs.target_audience",
+              "promotion": "=inputs.promotion"
+            },
+            "required": [
+              "campaign_goal",
+              "products",
+              "start_date",
+              "end_date"
+            ],
+            "expected": [
+              "target_audience",
+              "promotion"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "required_inputs_present",
+          "name": "Goal and dates present?",
+          "excel_step": "Validate inputs",
+          "description": "Excel rule: if the campaign goal or dates are missing, request them before generating the brief.",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "Required information missing",
+              "when": "not steps.validate_inputs.is_valid",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "Before I can write the brief I need: {{ join(steps.validate_inputs.missing_required, ', ') }}.",
+                "missing": "=steps.validate_inputs.missing_required",
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "End date before start date",
+              "when": "inputs.end_date < inputs.start_date",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "The end date ({{ inputs.end_date }}) is before the start date ({{ inputs.start_date }}). Please give the correct dates.",
+                "missing": [
+                  "end_date"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "All required information present",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "Goal, products and dates are present.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "identify_objective",
+          "name": "Identify campaign objective",
+          "excel_step": "identify campaign objective",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "campaign_objective",
+            "facts": {
+              "goal": "=inputs.campaign_goal",
+              "promotion": "=inputs.promotion",
+              "target_audience": "=inputs.target_audience"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "load_products",
+          "name": "Look up products",
+          "excel_step": "summarize products",
+          "description": "",
+          "kind": "tool",
+          "tool": "product_data_reader",
+          "params": {
+            "selectors": "=inputs.products"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "products_found",
+          "name": "Products found?",
+          "excel_step": "summarize products",
+          "description": "",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "None of the products found",
+              "when": "steps.load_products.count == 0",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "I could not find any of these in the catalog: {{ join(inputs.products, ', ') }}. Please give SKUs, product names or a collection name that exists.",
+                "missing": [
+                  "products"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Products found",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "{{ steps.load_products.count }} product(s) found.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "summarize_products",
+          "name": "Summarize products",
+          "excel_step": "summarize products",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.load_products.products",
+            "derive": {
+              "summary": "row.product_name + ' (' + row.sku + ')' + iff(is_blank(row.price), '', ' - ' + str(row.price))"
+            },
+            "select": [
+              "sku",
+              "product_name",
+              "category",
+              "price",
+              "collection",
+              "summary"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "create_messaging",
+          "name": "Create messaging",
+          "excel_step": "create messaging",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "campaign_messaging",
+            "facts": {
+              "goal": "=inputs.campaign_goal",
+              "promotion": "=inputs.promotion",
+              "target_audience": "=inputs.target_audience",
+              "objective_type": "=steps.identify_objective.content.objective_type",
+              "products": "=steps.load_products.products"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "recommend_channels",
+          "name": "Create channel recommendations",
+          "excel_step": "create channel recommendations",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "channel_plan",
+            "facts": {
+              "goal": "=inputs.campaign_goal",
+              "target_audience": "=inputs.target_audience",
+              "objective_type": "=steps.identify_objective.content.objective_type"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "create_checklist",
+          "name": "Create campaign checklist",
+          "excel_step": "create campaign checklist",
+          "description": "",
+          "kind": "tool",
+          "tool": "content_generator",
+          "params": {
+            "task": "campaign_checklist",
+            "facts": {
+              "start_date": "=inputs.start_date",
+              "end_date": "=inputs.end_date",
+              "promotion": "=inputs.promotion",
+              "channels": "=steps.recommend_channels.content.channels"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "If campaign goal or dates are missing, request them before generating the brief",
+      "tools_required": [
+        "LLM",
+        "product data reader"
+      ],
+      "tool_map": {
+        "LLM": [
+          "content_generator"
+        ],
+        "product data reader": [
+          "product_data_reader"
+        ]
+      },
+      "allowed_tools": [
+        "content_generator",
+        "product_data_reader"
+      ],
+      "success_output": "Structured campaign brief with objective, audience, messaging, channels, timeline, and checklist",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "Campaign brief ready: {{ inputs.campaign_goal }} ({{ inputs.start_date }} to {{ inputs.end_date }})",
+            "severity": "success",
+            "result": {
+              "objective": "=steps.identify_objective.content.objective",
+              "objective_type": "=steps.identify_objective.content.objective_type",
+              "target_audience": "=coalesce(inputs.target_audience, 'Not specified')",
+              "promotion": "=coalesce(inputs.promotion, 'Not specified')",
+              "timeline": "=steps.create_checklist.content.timeline",
+              "products": "=steps.summarize_products.rows",
+              "messaging": "=steps.create_messaging.content",
+              "channels": "=steps.recommend_channels.content.channels",
+              "checklist": "=steps.create_checklist.content.checklist",
+              "generation_modes": "=unique([steps.identify_objective.mode, steps.create_messaging.mode, steps.recommend_channels.mode, steps.create_checklist.mode])"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "len(steps.load_products.unmatched_selectors) > 0",
+            "message": "Not found in the catalog and left out: {{ join(steps.load_products.unmatched_selectors, ', ') }}."
+          },
+          {
+            "when": "steps.create_messaging.mode == 'template'",
+            "message": "The objective, messaging, channels and checklist were built from the built-in templates; no language model was used."
+          },
+          {
+            "when": "len(steps.validate_inputs.missing_expected) > 0",
+            "message": "Not specified (not invented): {{ join(steps.validate_inputs.missing_expected, ', ') }}."
+          }
+        ]
+      },
+      "error_handling": [
+        "None of the requested products found in the catalog: the workflow asks the user for valid products instead of writing a brief about nothing.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Excel decision logic: 'If campaign goal or dates are missing, request them before generating the brief'. Goal, start date and end date are required; so is the product list because the 'summarize products' step cannot run without it. Target audience and promotion are optional and shown as 'Not specified' rather than invented.",
+        "'dates' is interpreted as a start date and an end date (ISO, YYYY-MM-DD); an end date before the start date is sent back to the user.",
+        "'product list' may be SKUs, product names, or a collection name; items are looked up in the catalog and unknown items are reported.",
+        "Objective, messaging, channels and checklist come from the LLM when one is configured, otherwise from labelled built-in templates. The template tone line says it is a default."
+      ],
+      "test_requests": [
+        {
+          "request": "Create a campaign brief for the new collection.",
+          "what_to_check": "Tests structured content generation"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "required_inputs_present",
+          "kind": "decision_case",
+          "label": "Required information missing",
+          "expression": "not steps.validate_inputs.is_valid",
+          "action": "await_input"
+        },
+        {
+          "step_id": "required_inputs_present",
+          "kind": "decision_case",
+          "label": "End date before start date",
+          "expression": "inputs.end_date < inputs.start_date",
+          "action": "await_input"
+        },
+        {
+          "step_id": "required_inputs_present",
+          "kind": "decision_case",
+          "label": "All required information present",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "products_found",
+          "kind": "decision_case",
+          "label": "None of the products found",
+          "expression": "steps.load_products.count == 0",
+          "action": "await_input"
+        },
+        {
+          "step_id": "products_found",
+          "kind": "decision_case",
+          "label": "Products found",
+          "expression": null,
+          "action": "continue"
+        }
+      ],
+      "excel_inputs": [
+        "Campaign goal",
+        "product list",
+        "target audience",
+        "promotion",
+        "dates"
+      ],
+      "excel_steps": [
+        "Validate inputs",
+        "identify campaign objective",
+        "summarize products",
+        "create messaging",
+        "create channel recommendations",
+        "create campaign checklist"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 8"
+    },
+    {
+      "id": "WF008",
+      "name": "SEO Keyword Classification",
+      "description": "User uploads or provides a keyword list. Result: Keyword report with intent, category, priority, and recommended target page",
+      "triggers": [
+        "User uploads or provides a keyword list",
+        "Sort this keyword list by search intent",
+        "Which category page should each of these keywords point to?",
+        "Classify my SEO keywords and rank the important ones"
+      ],
+      "routing_examples": [
+        "Sort this keyword list by search intent",
+        "Which category page should each of these keywords point to?",
+        "Classify my SEO keywords and rank the important ones"
+      ],
+      "routing_keywords": [
+        "keyword",
+        "keywords",
+        "seo",
+        "search intent",
+        "classify keywords",
+        "intent",
+        "target page",
+        "informational",
+        "transactional",
+        "navigational",
+        "commercial"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question, with the sample keyword CSV attached",
+          "request": "Classify these keywords and map them to pages.",
+          "attachments": [
+            "keywords_sample.csv"
+          ],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Keywords typed into the request",
+          "request": "Classify these keywords and map them to pages. Keywords: buy leather belt, how to wash a denim jacket, best wireless earbuds, summit footwear website",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "keywords_file",
+          "type": "file",
+          "description": "Keyword CSV/XLSX (column \"keyword\", optional \"search_volume\").",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Keyword CSV"
+          ],
+          "aliases": [
+            "file",
+            "csv",
+            "keyword list"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "keywords",
+          "type": "list",
+          "description": "Keywords typed directly into the request.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Keyword CSV"
+          ],
+          "aliases": [
+            "keyword list"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "categories_file",
+          "type": "file",
+          "description": "Product category file (category, target_page, terms).",
+          "required": false,
+          "default": "categories.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "product/category information"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "high_volume_threshold",
+          "type": "number",
+          "description": "Minimum monthly search volume for a keyword to count as high priority.",
+          "required": false,
+          "default": 1000,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [
+        {
+          "any_of": [
+            "keywords_file",
+            "keywords"
+          ],
+          "message": "Please attach a keyword CSV/XLSX file or type the keywords to classify."
+        }
+      ],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "read_keywords",
+          "name": "Read keywords",
+          "excel_step": "Read keywords",
+          "description": "",
+          "kind": "tool",
+          "tool": "keyword_reader",
+          "params": {
+            "source": "=inputs.keywords_file",
+            "keywords": "=inputs.keywords"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "remove_duplicates",
+          "name": "Remove duplicates",
+          "excel_step": "remove duplicates",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_dedupe",
+          "params": {
+            "rows": "=steps.read_keywords.rows",
+            "key": "norm_text(row.keyword)",
+            "keep_max": "search_volume"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "classify_intent",
+          "name": "Classify search intent",
+          "excel_step": "classify search intent",
+          "description": "Excel rule: classify each keyword as informational, commercial, transactional or navigational.",
+          "kind": "tool",
+          "tool": "keyword_classifier",
+          "params": {
+            "rows": "=steps.remove_duplicates.rows"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.count == len(steps.remove_duplicates.rows)",
+              "message": "The classifier did not return a result for every keyword.",
+              "category": "terminal"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "intent_summary",
+          "name": "Count keywords per intent",
+          "excel_step": "classify search intent",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.classify_intent.rows",
+            "group_by": [
+              "intent"
+            ],
+            "aggregations": {
+              "keywords": {
+                "op": "count"
+              }
+            },
+            "sort_by": [
+              "-keywords"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "load_categories",
+          "name": "Load category information",
+          "excel_step": "map keywords to categories",
+          "description": "",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.categories_file",
+            "required_columns": [
+              "category",
+              "target_page",
+              "terms"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "map_categories",
+          "name": "Map keywords to categories",
+          "excel_step": "map keywords to categories",
+          "description": "",
+          "kind": "tool",
+          "tool": "category_mapper",
+          "params": {
+            "rows": "=steps.classify_intent.rows",
+            "categories": "=steps.load_categories.rows"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "score_priority",
+          "name": "Score keyword priority",
+          "excel_step": "identify high-priority keywords",
+          "description": "High = transactional/commercial intent, mapped to a category, with enough search volume.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.map_categories.rows",
+            "vars": {
+              "min_volume": "=inputs.high_volume_threshold"
+            },
+            "derive": {
+              "priority": "iff(row.intent in ['transactional', 'commercial'] and not is_blank(row.category) and iff(is_blank(get(row, 'search_volume')), true, row.search_volume >= vars.min_volume), 'high', iff(row.intent == 'informational' or is_blank(row.category), 'low', 'medium'))",
+              "priority_basis": "iff(is_blank(get(row, 'search_volume')), 'intent and category only (no search volume supplied)', 'intent, category and search volume')",
+              "priority_order": "iff(row.priority == 'high', 1, iff(row.priority == 'medium', 2, 3))",
+              "recommended_target_page": "row.target_page"
+            },
+            "sort_by": [
+              "priority_order",
+              "-search_volume",
+              "keyword"
+            ],
+            "label": "Keyword priority rule"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "high_priority",
+          "name": "Identify high-priority keywords",
+          "excel_step": "identify high-priority keywords",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.score_priority.rows",
+            "where": "row.priority == 'high'",
+            "label": "High-priority keywords"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "export_results",
+          "name": "Export results",
+          "excel_step": "export results",
+          "description": "",
+          "kind": "tool",
+          "tool": "dataset_exporter",
+          "params": {
+            "rows": "=steps.score_priority.rows",
+            "name": "keyword_report",
+            "columns": [
+              "keyword",
+              "search_volume",
+              "intent",
+              "intent_confidence",
+              "category",
+              "priority",
+              "recommended_target_page"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Classify each keyword as informational, commercial, transactional, or navigational",
+      "tools_required": [
+        "CSV reader",
+        "LLM/classifier"
+      ],
+      "tool_map": {
+        "CSV reader": [
+          "csv_reader",
+          "keyword_reader",
+          "table_dedupe",
+          "dataset_exporter"
+        ],
+        "LLM/classifier": [
+          "keyword_classifier",
+          "category_mapper"
+        ]
+      },
+      "allowed_tools": [
+        "category_mapper",
+        "csv_reader",
+        "dataset_exporter",
+        "keyword_classifier",
+        "keyword_reader",
+        "table_dedupe"
+      ],
+      "success_output": "Keyword report with intent, category, priority, and recommended target page",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ steps.classify_intent.count }} unique keywords classified; {{ steps.high_priority.count }} high priority",
+            "severity": "success",
+            "result": {
+              "keywords_classified": "=steps.classify_intent.count",
+              "duplicates_removed": "=steps.remove_duplicates.removed_count",
+              "intent_counts": "=steps.classify_intent.intent_counts",
+              "high_priority_keywords": "=steps.high_priority.rows",
+              "keyword_report": "=steps.score_priority.rows",
+              "exported_file": "=steps.export_results.path"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "steps.remove_duplicates.removed_count > 0",
+            "message": "{{ steps.remove_duplicates.removed_count }} duplicate keyword(s) were removed."
+          },
+          {
+            "when": "steps.map_categories.unmapped_count > 0",
+            "message": "{{ steps.map_categories.unmapped_count }} keyword(s) did not match any category and have no target page."
+          },
+          {
+            "when": "steps.classify_intent.defaulted_count > 0",
+            "message": "{{ steps.classify_intent.defaulted_count }} keyword(s) had no intent signal words and were classified 'commercial' with low confidence."
+          },
+          {
+            "when": "len(steps.read_keywords.warnings) > 0",
+            "message": "{{ join(steps.read_keywords.warnings, ' ') }}"
+          }
+        ]
+      },
+      "error_handling": [
+        "No keywords, a missing keyword column or an unreadable file stop the workflow with a clear message.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Keywords can be attached as a CSV/XLSX file (column 'keyword', optional 'search_volume') or typed into the request. At least one is required; there is no silent default keyword list.",
+        "Duplicates are detected ignoring case, punctuation and spacing ('Buy Leather Belt Online' = 'buy leather belt online'); the row with the larger search volume is kept.",
+        "Intent uses a transparent rule lexicon (data/reference/intent_lexicon.json), not an LLM: navigational > informational (question words) > transactional > commercial. A keyword with no signal words is classified commercial with LOW confidence and says so.",
+        "The workbook does not define 'high priority'. Interpretation: intent is transactional or commercial AND the keyword maps to a category AND (search volume >= high_volume_threshold, or no volume was supplied). Informational or unmapped keywords are low; the rest medium.",
+        "The workbook lists no export tool for the 'export results' step; the dataset exporter (writes a CSV into outputs/) implements it and is mapped under the 'CSV reader' entry.",
+        "Category mapping scores each category by how many of its terms appear in the keyword (data/fixtures/categories.csv); unmapped keywords are reported, not forced into a category."
+      ],
+      "test_requests": [
+        {
+          "request": "Classify these keywords and map them to pages.",
+          "what_to_check": "Tests classification and mapping"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "remove_duplicates",
+          "kind": "row_rule",
+          "label": "Remove duplicates",
+          "expression": "norm_text(row.keyword)",
+          "action": null
+        },
+        {
+          "step_id": "classify_intent",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.count == len(steps.remove_duplicates.rows)",
+          "action": null
+        },
+        {
+          "step_id": "high_priority",
+          "kind": "row_rule",
+          "label": "High-priority keywords",
+          "expression": "row.priority == 'high'",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Keyword CSV",
+        "product/category information"
+      ],
+      "excel_steps": [
+        "Read keywords",
+        "remove duplicates",
+        "classify search intent",
+        "map keywords to categories",
+        "identify high-priority keywords",
+        "export results"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 9"
+    },
+    {
+      "id": "WF009",
+      "name": "Employee Task Assignment",
+      "description": "Manager asks the agent to assign a task. Result: Recommended employee, reasoning, priority, deadline, and task summary",
+      "triggers": [
+        "Manager asks the agent to assign a task",
+        "Who on the team should take this ticket?",
+        "Find the right person for this work item",
+        "Assign a task to whoever has the skills and free time"
+      ],
+      "routing_examples": [
+        "Who on the team should take this ticket?",
+        "Find the right person for this work item",
+        "Assign a task to whoever has the skills and free time"
+      ],
+      "routing_keywords": [
+        "assign",
+        "assignment",
+        "task",
+        "employee",
+        "developer",
+        "who should",
+        "best person",
+        "workload",
+        "capacity",
+        "delegate",
+        "ticket"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Task with a clear owner",
+          "request": "Assign this urgent task to the best available developer: Fix the checkout payment bug in the React frontend",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "No suitable employee (escalates)",
+          "request": "Assign this task to a developer: Migrate the database to MongoDB",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        },
+        {
+          "title": "Excel test question (asks what the task is)",
+          "request": "Assign this urgent task to the best available developer.",
+          "attachments": [],
+          "expect_state": "needs_input",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "task_description",
+          "type": "string",
+          "description": "What the task is about, e.g. \"Fix the checkout payment bug in the React frontend\".",
+          "required": true,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Task description"
+          ],
+          "aliases": [
+            "task",
+            "ticket",
+            "work item"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "required_skills",
+          "type": "list",
+          "description": "Skills the assignee must have (otherwise detected from the task description).",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "skills"
+          ],
+          "aliases": [
+            "skills",
+            "skill"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "description": "Only consider employees with this role, e.g. developer.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [
+            "role",
+            "team"
+          ],
+          "extract_pattern": "(?i)\\b(developer|designer|devops|qa engineer|content writer)s?\\b",
+          "example": null
+        },
+        {
+          "name": "priority",
+          "type": "choice",
+          "description": "Task priority.",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": [
+            "low",
+            "medium",
+            "high",
+            "urgent"
+          ],
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "priority"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "deadline",
+          "type": "date",
+          "description": "Deadline (YYYY-MM-DD).",
+          "required": false,
+          "default": null,
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "deadline"
+          ],
+          "aliases": [
+            "due",
+            "due date"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "min_available_hours",
+          "type": "number",
+          "description": "Minimum free hours this week for an employee to count as available.",
+          "required": false,
+          "default": 4,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [
+        {
+          "name": "Employee/task database (simulated)",
+          "description": "Employees with skills and weekly capacity, and open tasks with estimated hours.",
+          "covers": [
+            "employee list",
+            "workload"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "id": "analyze_task",
+          "name": "Understand task requirements",
+          "excel_step": "Understand task requirements",
+          "description": "",
+          "kind": "tool",
+          "tool": "task_analyzer",
+          "params": {
+            "task_description": "=inputs.task_description",
+            "explicit_skills": "=coalesce(inputs.required_skills, [])"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "skills_known",
+          "name": "Required skills known?",
+          "excel_step": "Understand task requirements",
+          "description": "",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "No required skills could be determined",
+              "when": "len(steps.analyze_task.required_skills) == 0",
+              "then": {
+                "type": "await_input",
+                "target": null,
+                "message": "I could not tell which skills this task needs. Please list the required skills (for example: python, api, postgresql).",
+                "missing": [
+                  "required_skills"
+                ],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "Required skills determined",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "Required skills: {{ join(steps.analyze_task.required_skills, ', ') }}.",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "load_employees",
+          "name": "Load employees",
+          "excel_step": "compare employee skills",
+          "description": "",
+          "kind": "tool",
+          "tool": "employee_db",
+          "params": {
+            "entity": "employees",
+            "filters": {
+              "role": "=inputs.role"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.count > 0",
+              "message": "No employees were found{{ iff(exists(inputs.role), ' with the role ' + inputs.role, '') }}. Check the role name.",
+              "category": "user_correctable"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "compare_skills",
+          "name": "Compare employee skills",
+          "excel_step": "compare employee skills",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.load_employees.rows",
+            "vars": {
+              "required": "=steps.analyze_task.required_skills"
+            },
+            "derive": {
+              "matched_skills": "intersect(row.skills, vars.required)",
+              "matched_text": "join(row.matched_skills, ', ')",
+              "skill_match": "len(row.matched_skills) / len(vars.required)"
+            },
+            "label": "Skill match"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "load_open_tasks",
+          "name": "Load open tasks",
+          "excel_step": "check current workload",
+          "description": "",
+          "kind": "tool",
+          "tool": "employee_db",
+          "params": {
+            "entity": "open_tasks"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "sum_workload",
+          "name": "Sum open hours per employee",
+          "excel_step": "check current workload",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.load_open_tasks.rows",
+            "group_by": [
+              "assignee_id"
+            ],
+            "aggregations": {
+              "open_hours": {
+                "op": "sum",
+                "field": "estimated_hours"
+              },
+              "open_tasks": {
+                "op": "count"
+              }
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "join_workload",
+          "name": "Attach workload to candidates",
+          "excel_step": "check current workload",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.compare_skills.rows",
+            "right": "=steps.sum_workload.rows",
+            "left_key": "employee_id",
+            "right_key": "assignee_id",
+            "how": "left",
+            "right_fields": [
+              "open_hours",
+              "open_tasks"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "compute_capacity",
+          "name": "Compute free capacity",
+          "excel_step": "check current workload",
+          "description": "Excel rule: prefer employees with the required skills and available capacity.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.join_workload.rows",
+            "vars": {
+              "min_hours": "=inputs.min_available_hours"
+            },
+            "derive": {
+              "current_load": "coalesce(row.open_hours, 0)",
+              "available_hours": "iff(row.status == 'active', row.weekly_capacity_hours - row.current_load, 0)",
+              "eligible": "row.skill_match >= 1 and row.available_hours >= vars.min_hours",
+              "exclusion_reason": "iff(row.eligible, '', iff(row.status != 'active', 'not available (' + row.status + ')', iff(row.skill_match < 1, 'missing required skills', 'not enough free capacity')))"
+            },
+            "label": "Excel rule: required skills and available capacity"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "rank_candidates",
+          "name": "Rank candidates",
+          "excel_step": "rank candidates",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.compute_capacity.rows",
+            "derive": {
+              "score": "round(100 * (0.6 * row.skill_match + 0.4 * min(row.available_hours / row.weekly_capacity_hours, 1)), 1)"
+            },
+            "sort_by": [
+              "-eligible",
+              "-score",
+              "name"
+            ],
+            "rank_field": "rank",
+            "select": [
+              "rank",
+              "employee_id",
+              "name",
+              "role",
+              "matched_text",
+              "skill_match",
+              "current_load",
+              "available_hours",
+              "weekly_capacity_hours",
+              "score",
+              "eligible",
+              "exclusion_reason"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "suitable_candidates",
+          "name": "Suitable candidates",
+          "excel_step": "select employee",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.rank_candidates.rows",
+            "where": "row.eligible",
+            "label": "Suitable candidates"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "suitable_exists",
+          "name": "Any suitable employee?",
+          "excel_step": "select employee",
+          "description": "Excel rule: escalate if no suitable employee exists.",
+          "kind": "decision",
+          "tool": null,
+          "params": {},
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": [
+            {
+              "label": "No suitable employee exists",
+              "when": "steps.suitable_candidates.count == 0",
+              "then": {
+                "type": "end",
+                "target": null,
+                "message": "No employee has all required skills ({{ join(steps.analyze_task.required_skills, ', ') }}) and enough free capacity. Escalate to the manager.",
+                "missing": [],
+                "outcome": "escalated",
+                "category": "user_correctable"
+              }
+            },
+            {
+              "label": "At least one suitable employee",
+              "when": null,
+              "then": {
+                "type": "continue",
+                "target": null,
+                "message": "{{ steps.suitable_candidates.count }} suitable candidate(s).",
+                "missing": [],
+                "outcome": "completed",
+                "category": "user_correctable"
+              }
+            }
+          ]
+        },
+        {
+          "id": "pick_employee",
+          "name": "Select the employee",
+          "excel_step": "select employee",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.suitable_candidates.rows",
+            "limit": 1
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "assignment_summary",
+          "name": "Generate assignment summary",
+          "excel_step": "generate assignment summary",
+          "description": "",
+          "kind": "tool",
+          "tool": "report_builder",
+          "params": {
+            "title": "Task assignment recommendation",
+            "sections": [
+              {
+                "heading": "Task",
+                "body": "=inputs.task_description"
+              },
+              {
+                "heading": "Recommended employee",
+                "body": [
+                  "{{ steps.pick_employee.rows[0].name }} ({{ steps.pick_employee.rows[0].role }}, {{ steps.pick_employee.rows[0].employee_id }})",
+                  "Priority: {{ coalesce(inputs.priority, 'not specified') }}",
+                  "Deadline: {{ coalesce(inputs.deadline, 'not specified') }}"
+                ]
+              },
+              {
+                "heading": "Reasoning",
+                "body": [
+                  "Has all required skills: {{ join(steps.analyze_task.required_skills, ', ') }}",
+                  "Free capacity this week: {{ steps.pick_employee.rows[0].available_hours }}h of {{ steps.pick_employee.rows[0].weekly_capacity_hours }}h",
+                  "Ranked #1 of {{ steps.suitable_candidates.count }} suitable candidate(s), score {{ steps.pick_employee.rows[0].score }}",
+                  "{{ steps.analyze_task.note }}"
+                ]
+              }
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Prefer employees with required skills and available capacity; escalate if no suitable employee exists",
+      "tools_required": [
+        "Employee/task database",
+        "ranking logic"
+      ],
+      "tool_map": {
+        "Employee/task database": [
+          "employee_db",
+          "task_analyzer"
+        ],
+        "ranking logic": [
+          "table_query",
+          "table_aggregate",
+          "table_join",
+          "report_builder"
+        ]
+      },
+      "allowed_tools": [
+        "employee_db",
+        "report_builder",
+        "table_aggregate",
+        "table_join",
+        "table_query",
+        "task_analyzer"
+      ],
+      "success_output": "Recommended employee, reasoning, priority, deadline, and task summary",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "Assign to {{ steps.pick_employee.rows[0].name }} ({{ steps.pick_employee.rows[0].role }})",
+            "severity": "success",
+            "result": {
+              "recommended_employee": "=steps.pick_employee.rows[0].name",
+              "employee_id": "=steps.pick_employee.rows[0].employee_id",
+              "priority": "=coalesce(inputs.priority, 'not specified')",
+              "deadline": "=coalesce(inputs.deadline, 'not specified')",
+              "required_skills": "=steps.analyze_task.required_skills",
+              "task_summary": "=steps.assignment_summary.text",
+              "ranking": "=steps.rank_candidates.rows"
+            }
+          },
+          "escalated": {
+            "headline": "No suitable employee - escalate to the manager",
+            "severity": "warning",
+            "result": {
+              "required_skills": "=steps.analyze_task.required_skills",
+              "priority": "=coalesce(inputs.priority, 'not specified')",
+              "deadline": "=coalesce(inputs.deadline, 'not specified')",
+              "why_nobody_qualifies": "=steps.rank_candidates.rows"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "steps.compute_capacity.error_count > 0",
+            "message": "{{ steps.compute_capacity.error_count }} employee record(s) had missing capacity data and were not considered."
+          }
+        ]
+      },
+      "error_handling": [
+        "No suitable employee ends the workflow with outcome 'escalated' (a business result, not an error) and explains why each candidate was excluded.",
+        "Database outages are retried (bounded) and then fail the workflow.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Required skills are taken from the request ('skills') or detected by keyword matching against data/reference/skill_lexicon.json - not by an LLM. If none can be determined the workflow asks for them; skills are never guessed.",
+        "Excel decision logic: 'Prefer employees with required skills and available capacity; escalate if no suitable employee exists'. A suitable employee has ALL required skills, is active, and has at least min_available_hours of free capacity this week.",
+        "Free capacity = weekly capacity hours - estimated hours of open tasks assigned to that employee (done tasks do not count). Employees on leave have 0 free hours.",
+        "Ranking score = 100 x (0.6 x skill match + 0.4 x min(free hours / weekly capacity, 1)); candidates that are not suitable are listed below the suitable ones with the reason they were excluded.",
+        "The employee list and workload come from the SIMULATED employee/task database (fixture data).",
+        "Priority and deadline are carried into the assignment summary; the workbook gives no rule that changes ranking based on them, so none is invented."
+      ],
+      "test_requests": [
+        {
+          "request": "Assign this urgent task to the best available developer.",
+          "what_to_check": "Tests ranking and decision logic"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "skills_known",
+          "kind": "decision_case",
+          "label": "No required skills could be determined",
+          "expression": "len(steps.analyze_task.required_skills) == 0",
+          "action": "await_input"
+        },
+        {
+          "step_id": "skills_known",
+          "kind": "decision_case",
+          "label": "Required skills determined",
+          "expression": null,
+          "action": "continue"
+        },
+        {
+          "step_id": "load_employees",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.count > 0",
+          "action": null
+        },
+        {
+          "step_id": "suitable_candidates",
+          "kind": "row_rule",
+          "label": "Suitable candidates",
+          "expression": "row.eligible",
+          "action": null
+        },
+        {
+          "step_id": "suitable_exists",
+          "kind": "decision_case",
+          "label": "No suitable employee exists",
+          "expression": "steps.suitable_candidates.count == 0",
+          "action": "end"
+        },
+        {
+          "step_id": "suitable_exists",
+          "kind": "decision_case",
+          "label": "At least one suitable employee",
+          "expression": null,
+          "action": "continue"
+        }
+      ],
+      "excel_inputs": [
+        "Task description",
+        "employee list",
+        "skills",
+        "workload",
+        "priority",
+        "deadline"
+      ],
+      "excel_steps": [
+        "Understand task requirements",
+        "compare employee skills",
+        "check current workload",
+        "rank candidates",
+        "select employee",
+        "generate assignment summary"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 10"
+    },
+    {
+      "id": "WF010",
+      "name": "Workflow Performance Report",
+      "description": "User asks for a performance report. Result: Performance summary with metrics, problem areas, and improvement recommendations",
+      "triggers": [
+        "User asks for a performance report",
+        "Show me a performance report for our workflows",
+        "Which automations are slow or unreliable?",
+        "What is the failure rate of each workflow?"
+      ],
+      "routing_examples": [
+        "Show me a performance report for our workflows",
+        "Which automations are slow or unreliable?",
+        "What is the failure rate of each workflow?"
+      ],
+      "routing_keywords": [
+        "performance",
+        "performance report",
+        "failing",
+        "failure rate",
+        "failures",
+        "slow",
+        "execution time",
+        "logs",
+        "success rate",
+        "errors",
+        "reliability"
+      ],
+      "routing_patterns": [],
+      "examples": [
+        {
+          "title": "Excel test question",
+          "request": "Which workflows are failing most often?",
+          "attachments": [],
+          "expect_state": "executed",
+          "note": ""
+        }
+      ],
+      "inputs": [
+        {
+          "name": "logs_file",
+          "type": "file",
+          "description": "Workflow execution log CSV.",
+          "required": false,
+          "default": "workflow_execution_logs.csv",
+          "items": "string",
+          "choices": null,
+          "minimum": null,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [
+            "Workflow execution logs"
+          ],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "failure_rate_threshold_pct",
+          "type": "number",
+          "description": "Flag workflows whose failure rate is above this percentage.",
+          "required": false,
+          "default": 10,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [
+            "threshold",
+            "failure threshold"
+          ],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "slow_run_threshold_sec",
+          "type": "number",
+          "description": "Flag workflows whose average run time is above this many seconds.",
+          "required": false,
+          "default": 30,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "slow_step_threshold_sec",
+          "type": "number",
+          "description": "A step is slow when its average duration is above this many seconds.",
+          "required": false,
+          "default": 5,
+          "items": "string",
+          "choices": null,
+          "minimum": 0.0,
+          "maximum": null,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        },
+        {
+          "name": "top_n",
+          "type": "integer",
+          "description": "How many frequent errors / slow steps to list.",
+          "required": false,
+          "default": 5,
+          "items": "string",
+          "choices": null,
+          "minimum": 1.0,
+          "maximum": 50.0,
+          "pattern": null,
+          "grounded": false,
+          "expose": true,
+          "covers": [],
+          "aliases": [],
+          "extract_pattern": null,
+          "example": null
+        }
+      ],
+      "input_groups": [],
+      "data_sources": [],
+      "steps": [
+        {
+          "id": "load_logs",
+          "name": "Load execution logs",
+          "excel_step": "Load execution logs",
+          "description": "",
+          "kind": "tool",
+          "tool": "csv_reader",
+          "params": {
+            "source": "=inputs.logs_file",
+            "numeric_columns": [
+              "step_duration_sec"
+            ],
+            "required_columns": [
+              "run_id",
+              "workflow_id",
+              "step_name",
+              "step_status",
+              "step_duration_sec"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [
+            {
+              "expr": "output.row_count > 0",
+              "message": "The log file contains no rows.",
+              "category": "user_correctable"
+            }
+          ],
+          "cases": []
+        },
+        {
+          "id": "build_run_table",
+          "name": "Collapse step logs into runs",
+          "excel_step": "calculate success/failure rate",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.load_logs.rows",
+            "group_by": [
+              "workflow_id",
+              "run_id"
+            ],
+            "aggregations": {
+              "failed_steps": {
+                "op": "count_if",
+                "where": "row.step_status == 'failed'"
+              },
+              "run_duration_sec": {
+                "op": "sum",
+                "field": "step_duration_sec"
+              }
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "mark_failed_runs",
+          "name": "Mark failed runs",
+          "excel_step": "calculate success/failure rate",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.build_run_table.rows",
+            "derive": {
+              "run_failed": "row.failed_steps > 0"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "count_runs",
+          "name": "Count runs and failures per workflow",
+          "excel_step": "calculate success/failure rate",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.mark_failed_runs.rows",
+            "group_by": [
+              "workflow_id"
+            ],
+            "aggregations": {
+              "runs": {
+                "op": "count"
+              },
+              "failed_runs": {
+                "op": "count_if",
+                "where": "row.run_failed"
+              }
+            },
+            "sort_by": [
+              "workflow_id"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "failure_rates",
+          "name": "Calculate failure and success rates",
+          "excel_step": "calculate success/failure rate",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.count_runs.rows",
+            "derive": {
+              "failure_rate_pct": "round(row.failed_runs / row.runs * 100, 1)",
+              "success_rate_pct": "round(100 - row.failure_rate_pct, 1)"
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "average_run_time",
+          "name": "Calculate average execution time",
+          "excel_step": "calculate average execution time",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.mark_failed_runs.rows",
+            "group_by": [
+              "workflow_id"
+            ],
+            "aggregations": {
+              "avg_duration_sec": {
+                "op": "avg",
+                "field": "run_duration_sec"
+              }
+            },
+            "decimals": 1
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "join_run_time",
+          "name": "Combine rates and run times",
+          "excel_step": "calculate average execution time",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.failure_rates.rows",
+            "right": "=steps.average_run_time.rows",
+            "left_key": "workflow_id",
+            "right_key": "workflow_id",
+            "how": "left"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "flag_workflows",
+          "name": "Flag workflows",
+          "excel_step": "calculate average execution time",
+          "description": "Excel rule: flag workflows with a failure rate above 10% or an average execution time above the defined threshold.",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.join_run_time.rows",
+            "vars": {
+              "max_failure_pct": "=inputs.failure_rate_threshold_pct",
+              "max_run_sec": "=inputs.slow_run_threshold_sec"
+            },
+            "derive": {
+              "flag_failure": "row.failure_rate_pct > vars.max_failure_pct",
+              "flag_slow": "row.avg_duration_sec > vars.max_run_sec",
+              "flagged": "row.flag_failure or row.flag_slow"
+            },
+            "sort_by": [
+              "-failure_rate_pct",
+              "workflow_id"
+            ],
+            "label": "Excel rule: failure rate above threshold or average time above threshold"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "error_rows",
+          "name": "Select failed steps with an error message",
+          "excel_step": "identify frequent errors",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.load_logs.rows",
+            "where": "row.step_status == 'failed' and not is_blank(row.error_message)"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "count_errors",
+          "name": "Count errors",
+          "excel_step": "identify frequent errors",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.error_rows.rows",
+            "group_by": [
+              "workflow_id",
+              "step_name",
+              "error_message"
+            ],
+            "aggregations": {
+              "occurrences": {
+                "op": "count"
+              }
+            },
+            "sort_by": [
+              "-occurrences",
+              "workflow_id"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "frequent_errors",
+          "name": "Most frequent errors",
+          "excel_step": "identify frequent errors",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.count_errors.rows",
+            "limit": "=inputs.top_n"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "top_error_by_workflow",
+          "name": "Top error per workflow",
+          "excel_step": "identify frequent errors",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.count_errors.rows",
+            "group_by": [
+              "workflow_id"
+            ],
+            "aggregations": {
+              "top_error": {
+                "op": "first",
+                "field": "error_message"
+              },
+              "top_error_count": {
+                "op": "first",
+                "field": "occurrences"
+              }
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "step_durations",
+          "name": "Average duration per step",
+          "excel_step": "identify slow steps",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.load_logs.rows",
+            "group_by": [
+              "workflow_id",
+              "step_name"
+            ],
+            "aggregations": {
+              "executions": {
+                "op": "count"
+              },
+              "avg_step_sec": {
+                "op": "avg",
+                "field": "step_duration_sec"
+              }
+            },
+            "decimals": 1
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "slow_steps",
+          "name": "Identify slow steps",
+          "excel_step": "identify slow steps",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.step_durations.rows",
+            "vars": {
+              "slow_sec": "=inputs.slow_step_threshold_sec"
+            },
+            "where": "row.avg_step_sec > vars.slow_sec",
+            "sort_by": [
+              "-avg_step_sec",
+              "workflow_id"
+            ],
+            "limit": "=inputs.top_n",
+            "label": "Slow steps (average duration above threshold)"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "slowest_by_workflow",
+          "name": "Slowest step per workflow",
+          "excel_step": "identify slow steps",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_aggregate",
+          "params": {
+            "rows": "=steps.slow_steps.rows",
+            "group_by": [
+              "workflow_id"
+            ],
+            "aggregations": {
+              "slowest_step": {
+                "op": "first",
+                "field": "step_name"
+              },
+              "slowest_step_sec": {
+                "op": "first",
+                "field": "avg_step_sec"
+              }
+            }
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "flagged_only",
+          "name": "Flagged workflows",
+          "excel_step": "generate recommendations",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.flag_workflows.rows",
+            "where": "row.flagged",
+            "label": "Flagged workflows"
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "attach_top_errors",
+          "name": "Attach most common error",
+          "excel_step": "generate recommendations",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.flagged_only.rows",
+            "right": "=steps.top_error_by_workflow.rows",
+            "left_key": "workflow_id",
+            "right_key": "workflow_id",
+            "how": "left",
+            "right_fields": [
+              "top_error",
+              "top_error_count"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "attach_slowest_steps",
+          "name": "Attach slowest step",
+          "excel_step": "generate recommendations",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_join",
+          "params": {
+            "left": "=steps.attach_top_errors.rows",
+            "right": "=steps.slowest_by_workflow.rows",
+            "left_key": "workflow_id",
+            "right_key": "workflow_id",
+            "how": "left",
+            "right_fields": [
+              "slowest_step",
+              "slowest_step_sec"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        },
+        {
+          "id": "build_recommendations",
+          "name": "Generate recommendations",
+          "excel_step": "generate recommendations",
+          "description": "",
+          "kind": "tool",
+          "tool": "table_query",
+          "params": {
+            "rows": "=steps.attach_slowest_steps.rows",
+            "derive": {
+              "recommendation": "strip(iff(row.flag_failure, 'Investigate failures: ' + str(row.failure_rate_pct) + '% of runs failed' + iff(is_blank(row.top_error), '', ' (most common error: ' + row.top_error + ')') + '. ', '') + iff(row.flag_slow, 'Reduce run time: average ' + str(row.avg_duration_sec) + 's' + iff(is_blank(row.slowest_step), '', ' (slowest step: ' + row.slowest_step + ' at ' + str(row.slowest_step_sec) + 's)') + '.', ''))"
+            },
+            "select": [
+              "workflow_id",
+              "failure_rate_pct",
+              "avg_duration_sec",
+              "flag_failure",
+              "flag_slow",
+              "recommendation"
+            ]
+          },
+          "when": null,
+          "on_failure": "fail",
+          "retry": null,
+          "ensure": [],
+          "cases": []
+        }
+      ],
+      "decision_logic": "Flag workflows with failure rate above 10% or average execution time above defined threshold",
+      "tools_required": [
+        "CSV/database reader",
+        "calculator",
+        "reporting"
+      ],
+      "tool_map": {
+        "CSV/database reader": [
+          "csv_reader"
+        ],
+        "calculator": [
+          "table_aggregate",
+          "table_query",
+          "table_join"
+        ],
+        "reporting": [
+          "report_builder"
+        ]
+      },
+      "allowed_tools": [
+        "csv_reader",
+        "report_builder",
+        "table_aggregate",
+        "table_join",
+        "table_query"
+      ],
+      "success_output": "Performance summary with metrics, problem areas, and improvement recommendations",
+      "final": {
+        "outcomes": {
+          "completed": {
+            "headline": "{{ iff(steps.flagged_only.count == 0, 'No workflow exceeds the thresholds', str(steps.flagged_only.count) + ' of ' + str(steps.flag_workflows.count) + ' workflows need attention') }}",
+            "severity": "success",
+            "result": {
+              "thresholds": {
+                "failure_rate_pct": "=inputs.failure_rate_threshold_pct",
+                "slow_run_sec": "=inputs.slow_run_threshold_sec",
+                "slow_step_sec": "=inputs.slow_step_threshold_sec"
+              },
+              "runs_analyzed": "=steps.mark_failed_runs.count",
+              "workflow_metrics": "=steps.flag_workflows.rows",
+              "recommendations": "=steps.build_recommendations.rows",
+              "frequent_errors": "=steps.frequent_errors.rows",
+              "slow_steps": "=steps.slow_steps.rows"
+            }
+          }
+        },
+        "warnings": [
+          {
+            "when": "len(steps.load_logs.warnings) > 0",
+            "message": "{{ join(steps.load_logs.warnings, ' ') }}"
+          }
+        ]
+      },
+      "error_handling": [
+        "Rows with non-numeric durations are treated as missing and reported; an unreadable or incomplete log file stops the workflow with the missing column names.",
+        "Default failure policy: a failed step stops the workflow (status 'failed') and keeps every result collected so far.",
+        "Transient tool errors (timeouts, outages) are retried up to 3 times with exponential back-off; validation errors are never retried.",
+        "Steps marked `on_failure: continue` may fail without stopping the workflow; the run then finishes as 'partial'."
+      ],
+      "interpretation_notes": [
+        "Input is a step-level execution log (run_id, workflow_id, step_name, step_status, step_duration_sec, error_message). A run FAILED if any of its steps failed; run duration = sum of its step durations. The default log is simulated history (data/fixtures/workflow_execution_logs.csv, generated by scripts/generate_fixtures.py).",
+        "Excel decision logic: 'Flag workflows with failure rate above 10% or average execution time above defined threshold'. The failure threshold (10%) is from the workbook; the workbook does not define the time threshold, so slow_run_threshold_sec defaults to 30 seconds and is an overridable input. Comparisons are strict (>).",
+        "A 'slow step' is a step whose average duration exceeds slow_step_threshold_sec (default 5 s, also not defined in the workbook).",
+        "Recommendations are rule-generated from the flags, the most frequent error and the slowest step of each flagged workflow; they are not LLM output."
+      ],
+      "test_requests": [
+        {
+          "request": "Which workflows are failing most often?",
+          "what_to_check": "Tests aggregation and reporting"
+        }
+      ],
+      "conditions": [
+        {
+          "step_id": "load_logs",
+          "kind": "postcondition",
+          "label": "Result must satisfy",
+          "expression": "output.row_count > 0",
+          "action": null
+        },
+        {
+          "step_id": "build_run_table",
+          "kind": "row_rule",
+          "label": "Collapse step logs into runs",
+          "expression": "row.step_status == 'failed'",
+          "action": null
+        },
+        {
+          "step_id": "count_runs",
+          "kind": "row_rule",
+          "label": "Count runs and failures per workflow",
+          "expression": "row.run_failed",
+          "action": null
+        },
+        {
+          "step_id": "error_rows",
+          "kind": "row_rule",
+          "label": "Select failed steps with an error message",
+          "expression": "row.step_status == 'failed' and not is_blank(row.error_message)",
+          "action": null
+        },
+        {
+          "step_id": "slow_steps",
+          "kind": "row_rule",
+          "label": "Slow steps (average duration above threshold)",
+          "expression": "row.avg_step_sec > vars.slow_sec",
+          "action": null
+        },
+        {
+          "step_id": "flagged_only",
+          "kind": "row_rule",
+          "label": "Flagged workflows",
+          "expression": "row.flagged",
+          "action": null
+        }
+      ],
+      "excel_inputs": [
+        "Workflow execution logs"
+      ],
+      "excel_steps": [
+        "Load execution logs",
+        "calculate success/failure rate",
+        "calculate average execution time",
+        "identify frequent errors",
+        "identify slow steps",
+        "generate recommendations"
+      ],
+      "enabled": true,
+      "is_extension": false,
+      "source": "workflows.xlsx / Workflows row 11"
+    }
+  ]
+}

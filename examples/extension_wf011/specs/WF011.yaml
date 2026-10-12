@@ -1,0 +1,104 @@
+# WF011 - Inventory Valuation Summary   (EXTENSION DEMO - not one of the assignment's ten workflows)
+# Added with: one row in workflows_extension.xlsx + this file. No new Python code, no new chatbot,
+# no change to the router or the engine: it only reuses tools that already exist.
+workflow_id: WF011
+routing_examples:
+  - What is the value of our current stock?
+  - How much money is tied up in inventory?
+routing_keywords: [inventory value, stock value, valuation, worth, money tied up, total value]
+examples:
+  - title: Extension demo request
+    request: "What is the total value of our inventory by category?"
+interpretation_notes:
+  - "Stock value of a product = current_stock x unit_cost (both columns come from the inventory CSV)."
+  - "Excel rule: a category is flagged when its share of the total value is strictly greater than 40%; the limit is an overridable input."
+error_handling_notes:
+  - "Rows with a missing stock or unit cost are excluded and reported."
+
+inputs:
+  - name: inventory_file
+    type: file
+    description: Product inventory CSV (needs category, current_stock and unit_cost columns).
+    default: inventory.csv
+    covers: ["Product inventory CSV"]
+  - name: share_limit_pct
+    type: number
+    minimum: 1
+    maximum: 100
+    default: 40
+    description: Flag a category when it holds more than this share of the total value.
+
+tool_map:
+  "CSV reader": [csv_reader]
+  "calculator": [table_query, table_aggregate]
+
+steps:
+  - id: load_inventory
+    name: Load inventory
+    excel_step: Load inventory
+    tool: csv_reader
+    params:
+      source: "=inputs.inventory_file"
+      numeric_columns: [current_stock, unit_cost]
+      required_columns: [category, current_stock, unit_cost]
+  - id: stock_value
+    name: Calculate stock value per product
+    excel_step: calculate stock value per product
+    tool: table_query
+    params:
+      rows: "=steps.load_inventory.rows"
+      derive:
+        stock_value: "round(row.current_stock * row.unit_cost, 2)"
+  - id: value_by_category
+    name: Total value by category
+    excel_step: total value by category
+    tool: table_aggregate
+    params:
+      rows: "=steps.stock_value.rows"
+      group_by: [category]
+      aggregations:
+        products: {op: count}
+        total_value: {op: sum, field: stock_value}
+  - id: grand_total
+    name: Grand total
+    excel_step: total value by category
+    tool: table_aggregate
+    params:
+      rows: "=steps.value_by_category.rows"
+      aggregations:
+        grand_total: {op: sum, field: total_value}
+  - id: flag_concentration
+    name: Flag high-value categories
+    excel_step: flag high-value categories
+    description: "Excel rule: flag a category holding more than 40% of the total value."
+    tool: table_query
+    params:
+      rows: "=steps.value_by_category.rows"
+      vars:
+        total: "=steps.grand_total.rows[0].grand_total"
+        limit: "=inputs.share_limit_pct"
+      derive:
+        share_pct: "round(row.total_value / vars.total * 100, 1)"
+        flagged: "row.share_pct > vars.limit"
+      sort_by: ["-total_value"]
+      label: "Excel rule: category share of total value above the limit"
+  - id: summarize
+    name: Summarize valuation
+    excel_step: summarize valuation
+    tool: report_builder
+    params:
+      title: Inventory valuation
+      sections:
+        - heading: Total
+          body: "Total inventory value: {{ steps.grand_total.rows[0].grand_total }}"
+        - heading: Largest category
+          body: "{{ steps.flag_concentration.rows[0].category }} - {{ steps.flag_concentration.rows[0].share_pct }}% of the total"
+
+final:
+  outcomes:
+    completed:
+      headline: "Inventory is worth {{ steps.grand_total.rows[0].grand_total }}; largest category: {{ steps.flag_concentration.rows[0].category }} ({{ steps.flag_concentration.rows[0].share_pct }}%)"
+      result:
+        total_value: "=steps.grand_total.rows[0].grand_total"
+        by_category: "=steps.flag_concentration.rows"
+        summary: "=steps.summarize.text"

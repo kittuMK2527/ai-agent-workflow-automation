@@ -1,0 +1,205 @@
+# WF004 - Product Description Generator
+workflow_id: WF004
+routing_examples:
+  - Write a description and SEO title for this product
+  - Create product copy for our new item
+  - Generate a meta description and short description for a product
+routing_keywords: [product description, seo content, seo title, meta description, short description, product copy, generate content, write description]
+
+examples:
+  - title: Full product details
+    request: "Generate SEO content for the Trail Water Bottle. Category: Outdoor; material: stainless steel; color: green; target audience: hikers; attributes: leak-proof, vacuum insulated"
+  - title: Some attributes missing (marked, not invented)
+    request: "Generate SEO content for the Canvas Tote Bag. Category: Accessories; material: cotton"
+  - title: Excel test question (asks which product)
+    request: "Generate SEO content for this product."
+    expect_state: needs_input
+
+interpretation_notes:
+  - "Product name is the only hard-required input: without it there is nothing to write about. Category, attributes, material, colour and target audience are 'expected' attributes."
+  - "Excel decision logic: 'Do not invent missing product attributes; explicitly mark missing information'. Missing expected attributes do NOT block the workflow; they are listed under missing_information, the copy leaves them out, and a warning is shown."
+  - "Each generated text is checked by the text validator (length limits, product name in the SEO title, and no colour/material words that are not in the supplied facts). A failed check fails the workflow rather than returning unchecked copy."
+  - "The text is produced by the LLM when one is configured, otherwise by a labelled built-in template; the result states which."
+error_handling_notes:
+  - "LLM timeouts/rate limits are retried (bounded) in strict LLM mode; in auto mode the labelled template is used instead."
+  - "Generated text that fails validation fails the workflow with the validator's reasons."
+
+inputs:
+  - name: product_name
+    type: string
+    required: true
+    description: Name of the product to write about.
+    covers: ["Product name"]
+    aliases: [product, name, item]
+    extract_pattern: '(?i)\b(?:for|about)\s+(?:(?:the|our|this|a|an)\s+)?([A-Za-z0-9][^.;:\n]*?)(?=\s+(?:in|made|using|with|aimed|targeting)\b|[.;:\n]|$)'
+  - name: category
+    type: string
+    description: Product category, e.g. Accessories.
+    covers: ["category"]
+  - name: attributes
+    type: list
+    items: string
+    description: Key features or attributes, e.g. waterproof, lightweight.
+    covers: ["attributes"]
+    aliases: [features, attribute]
+  - name: material
+    type: string
+    description: Material the product is made from.
+    covers: ["material"]
+  - name: color
+    type: string
+    description: Product colour.
+    covers: ["color"]
+    aliases: [colour]
+  - name: target_audience
+    type: string
+    description: Who the product is for.
+    covers: ["target audience"]
+    aliases: [audience, customers]
+
+tool_map:
+  "LLM": [content_generator]
+  "text validation": [text_validator]
+
+steps:
+  - id: validate_attributes
+    name: Validate required attributes
+    excel_step: Validate required attributes
+    tool: field_validator
+    params:
+      values:
+        product_name: "=inputs.product_name"
+        category: "=inputs.category"
+        attributes: "=inputs.attributes"
+        material: "=inputs.material"
+        color: "=inputs.color"
+        target_audience: "=inputs.target_audience"
+      required: [product_name]
+      expected: [category, attributes, material, color, target_audience]
+
+  - id: missing_information_policy
+    name: Missing attributes?
+    excel_step: Validate required attributes
+    description: "Excel rule: do not invent missing attributes; mark them explicitly."
+    kind: decision
+    cases:
+      - label: Product name missing
+        when: "not steps.validate_attributes.is_valid"
+        then:
+          type: await_input
+          missing: [product_name]
+          message: "Which product should I write content for? Please give at least the product name."
+      - label: Some expected attributes are missing
+        when: "len(steps.validate_attributes.missing_expected) > 0"
+        then:
+          type: continue
+          message: "Not provided: {{ join(steps.validate_attributes.missing_expected, ', ') }}. They are marked as missing and left out of the copy instead of being guessed."
+      - label: All attributes provided
+        then: {type: continue, message: "All expected attributes were provided."}
+
+  - id: write_description
+    name: Create product description
+    excel_step: create product description
+    tool: content_generator
+    params:
+      task: product_description
+      facts: "=steps.validate_attributes.present"
+  - id: check_description
+    name: Validate description
+    excel_step: create product description
+    tool: text_validator
+    params:
+      text: "=steps.write_description.content.text"
+      field: description
+      min_length: 20
+      facts: "=steps.validate_attributes.present"
+    ensure:
+      - expr: "output.valid"
+        message: "The generated description failed validation: {{ join(output.issues, '; ') }}"
+
+  - id: write_short_description
+    name: Generate short description
+    excel_step: generate short description
+    tool: content_generator
+    params:
+      task: short_description
+      facts: "=steps.validate_attributes.present"
+      context:
+        description: "=steps.write_description.content.text"
+  - id: check_short_description
+    name: Validate short description
+    excel_step: generate short description
+    tool: text_validator
+    params:
+      text: "=steps.write_short_description.content.text"
+      field: short_description
+      max_length: 120
+      facts: "=steps.validate_attributes.present"
+    ensure:
+      - expr: "output.valid"
+        message: "The generated short description failed validation: {{ join(output.issues, '; ') }}"
+
+  - id: write_seo_title
+    name: Generate SEO title
+    excel_step: generate SEO title
+    tool: content_generator
+    params:
+      task: seo_title
+      facts: "=steps.validate_attributes.present"
+  - id: check_seo_title
+    name: Validate SEO title
+    excel_step: generate SEO title
+    tool: text_validator
+    params:
+      text: "=steps.write_seo_title.content.text"
+      field: seo_title
+      max_length: 60
+      required_terms: ["=iff(len(inputs.product_name) <= 50, inputs.product_name, '')"]
+      facts: "=steps.validate_attributes.present"
+    ensure:
+      - expr: "output.valid"
+        message: "The generated SEO title failed validation: {{ join(output.issues, '; ') }}"
+
+  - id: write_meta_description
+    name: Generate meta description
+    excel_step: generate meta description
+    tool: content_generator
+    params:
+      task: meta_description
+      facts: "=steps.validate_attributes.present"
+  - id: check_meta_description
+    name: Validate meta description
+    excel_step: generate meta description
+    tool: text_validator
+    params:
+      text: "=steps.write_meta_description.content.text"
+      field: meta_description
+      min_length: 30
+      max_length: 160
+      facts: "=steps.validate_attributes.present"
+    ensure:
+      - expr: "output.valid"
+        message: "The generated meta description failed validation: {{ join(output.issues, '; ') }}"
+
+final:
+  warnings:
+    - when: "len(steps.validate_attributes.missing_expected) > 0"
+      message: "Not provided, so not mentioned in the copy: {{ join(steps.validate_attributes.missing_expected, ', ') }}."
+    - when: "steps.write_description.mode == 'template'"
+      message: "This text was built from the built-in template; no language model was used."
+  outcomes:
+    completed:
+      headline: "Content generated for {{ inputs.product_name }}"
+      result:
+        product_name: "=inputs.product_name"
+        description: "=steps.write_description.content.text"
+        short_description: "=steps.write_short_description.content.text"
+        seo_title: "=steps.write_seo_title.content.text"
+        meta_description: "=steps.write_meta_description.content.text"
+        missing_information: "=steps.validate_attributes.missing_expected"
+        attributes_used: "=steps.validate_attributes.present"
+        generation_modes: "=unique([steps.write_description.mode, steps.write_short_description.mode, steps.write_seo_title.mode, steps.write_meta_description.mode])"
+        character_counts:
+          short_description: "=steps.check_short_description.length"
+          seo_title: "=steps.check_seo_title.length"
+          meta_description: "=steps.check_meta_description.length"

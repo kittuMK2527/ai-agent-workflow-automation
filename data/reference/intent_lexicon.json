@@ -1,0 +1,8 @@
+{
+  "_comment": "Signals used by the rule-based keyword classifier. Precedence: navigational > informational > transactional > commercial > default (commercial, low confidence).",
+  "navigational": ["login", "log in", "sign in", "website", "homepage", "store locator", "contact us", "customer service", "official site", "northwind leather", "summit footwear"],
+  "informational_starts": ["how", "what", "why", "when", "where", "who", "can", "does", "is", "are", "guide", "tutorial"],
+  "informational_terms": ["how to", "what is", "guide", "tutorial", "tips", "ideas", "meaning", "difference between"],
+  "transactional": ["buy", "purchase", "order", "price", "prices", "cheap", "cheapest", "discount", "coupon", "deal", "deals", "sale", "free shipping", "shipping", "for sale", "near me"],
+  "commercial": ["best", "top", "top rated", "review", "reviews", "vs", "versus", "compare", "comparison", "alternative", "alternatives", "recommended"]
+}

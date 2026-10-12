@@ -1,0 +1,6 @@
+{"shipments": [
+ {"order_id": "ORD-1001", "carrier": "SwiftShip", "tracking_number": "SS1234567890", "shipment_status": "in_transit", "eta": "2026-10-14", "last_update": "2026-10-11: Departed regional facility - Dallas, TX"},
+ {"order_id": "ORD-1002", "carrier": "SwiftShip", "tracking_number": "SS0987654321", "shipment_status": "delivered", "eta": "2026-10-03", "last_update": "2026-10-03: Delivered, left at front door"},
+ {"order_id": "ORD-1005", "carrier": "NorthStar Freight", "tracking_number": "NS5550001122", "shipment_status": "delayed", "eta": "2026-10-15", "last_update": "2026-10-10: Weather delay at hub"},
+ {"order_id": "ORD-1006", "carrier": "SwiftShip", "tracking_number": "SS7771239900", "shipment_status": "label_created", "eta": "2026-10-16", "last_update": "2026-10-09: Shipping label created, awaiting pickup"}
+]}

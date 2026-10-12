@@ -1,0 +1,10 @@
+employee_id,name,role,skills,weekly_capacity_hours,status
+E01,Priya Raman,developer,python;django;postgresql;api,40,active
+E02,Marcus Cole,developer,react;javascript;css;frontend,40,active
+E03,Lena Fischer,developer,python;machine learning;data pipelines,40,active
+E04,Tom Okafor,developer,java;payments;api;postgresql,40,active
+E05,Sofia Alvarez,designer,figma;ui design;branding,40,active
+E06,Ken Watanabe,developer,react;node;payments;frontend,32,active
+E07,Aisha Khan,qa engineer,test automation;selenium;api,40,on_leave
+E08,Diego Santos,devops,aws;docker;ci cd;kubernetes,40,active
+E09,Hannah Brooks,content writer,seo;copywriting;content,24,active

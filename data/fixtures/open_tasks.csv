@@ -1,0 +1,11 @@
+task_id,assignee_id,title,estimated_hours,priority,status
+T-101,E01,Refactor inventory sync job,18,medium,open
+T-102,E01,Fix order export bug,10,high,open
+T-103,E02,Redesign product page,22,medium,open
+T-104,E04,Payment gateway upgrade,30,high,open
+T-105,E06,Checkout form validation,12,medium,open
+T-106,E03,Churn prediction prototype,26,low,open
+T-107,E08,Migrate CI pipeline,16,medium,open
+T-108,E02,Fix cart rendering bug,6,high,open
+T-109,E09,Autumn landing page copy,8,medium,open
+T-110,E04,Archive legacy reports,5,low,done

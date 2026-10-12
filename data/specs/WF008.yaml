@@ -1,0 +1,167 @@
+# WF008 - SEO Keyword Classification
+workflow_id: WF008
+routing_examples:
+  - Sort this keyword list by search intent
+  - Which category page should each of these keywords point to?
+  - Classify my SEO keywords and rank the important ones
+routing_keywords: [keyword, keywords, seo, search intent, classify keywords, intent, target page, informational, transactional, navigational, commercial]
+
+examples:
+  - title: Excel test question, with the sample keyword CSV attached
+    request: "Classify these keywords and map them to pages."
+    attachments: [keywords_sample.csv]
+  - title: Keywords typed into the request
+    request: "Classify these keywords and map them to pages. Keywords: buy leather belt, how to wash a denim jacket, best wireless earbuds, summit footwear website"
+
+interpretation_notes:
+  - "Keywords can be attached as a CSV/XLSX file (column 'keyword', optional 'search_volume') or typed into the request. At least one is required; there is no silent default keyword list."
+  - "Duplicates are detected ignoring case, punctuation and spacing ('Buy Leather Belt Online' = 'buy leather belt online'); the row with the larger search volume is kept."
+  - "Intent uses a transparent rule lexicon (data/reference/intent_lexicon.json), not an LLM: navigational > informational (question words) > transactional > commercial. A keyword with no signal words is classified commercial with LOW confidence and says so."
+  - "The workbook does not define 'high priority'. Interpretation: intent is transactional or commercial AND the keyword maps to a category AND (search volume >= high_volume_threshold, or no volume was supplied). Informational or unmapped keywords are low; the rest medium."
+  - "The workbook lists no export tool for the 'export results' step; the dataset exporter (writes a CSV into outputs/) implements it and is mapped under the 'CSV reader' entry."
+  - "Category mapping scores each category by how many of its terms appear in the keyword (data/fixtures/categories.csv); unmapped keywords are reported, not forced into a category."
+error_handling_notes:
+  - "No keywords, a missing keyword column or an unreadable file stop the workflow with a clear message."
+
+inputs:
+  - name: keywords_file
+    type: file
+    description: Keyword CSV/XLSX (column "keyword", optional "search_volume").
+    covers: ["Keyword CSV"]
+    aliases: [file, csv, keyword list]
+  - name: keywords
+    type: list
+    items: string
+    description: Keywords typed directly into the request.
+    covers: ["Keyword CSV"]
+    aliases: [keyword list]
+  - name: categories_file
+    type: file
+    description: Product category file (category, target_page, terms).
+    default: categories.csv
+    covers: ["product/category information"]
+  - name: high_volume_threshold
+    type: number
+    minimum: 0
+    default: 1000
+    description: Minimum monthly search volume for a keyword to count as high priority.
+
+input_groups:
+  - any_of: [keywords_file, keywords]
+    message: "Please attach a keyword CSV/XLSX file or type the keywords to classify."
+
+tool_map:
+  "CSV reader": [csv_reader, keyword_reader, table_dedupe, dataset_exporter]
+  "LLM/classifier": [keyword_classifier, category_mapper]
+
+steps:
+  - id: read_keywords
+    name: Read keywords
+    excel_step: Read keywords
+    tool: keyword_reader
+    params:
+      source: "=inputs.keywords_file"
+      keywords: "=inputs.keywords"
+
+  - id: remove_duplicates
+    name: Remove duplicates
+    excel_step: remove duplicates
+    tool: table_dedupe
+    params:
+      rows: "=steps.read_keywords.rows"
+      key: "norm_text(row.keyword)"
+      keep_max: search_volume
+
+  - id: classify_intent
+    name: Classify search intent
+    excel_step: classify search intent
+    description: "Excel rule: classify each keyword as informational, commercial, transactional or navigational."
+    tool: keyword_classifier
+    params:
+      rows: "=steps.remove_duplicates.rows"
+    ensure:
+      - expr: "output.count == len(steps.remove_duplicates.rows)"
+        message: "The classifier did not return a result for every keyword."
+
+  - id: intent_summary
+    name: Count keywords per intent
+    excel_step: classify search intent
+    tool: table_aggregate
+    params:
+      rows: "=steps.classify_intent.rows"
+      group_by: [intent]
+      aggregations:
+        keywords: {op: count}
+      sort_by: ["-keywords"]
+
+  - id: load_categories
+    name: Load category information
+    excel_step: map keywords to categories
+    tool: csv_reader
+    params:
+      source: "=inputs.categories_file"
+      required_columns: [category, target_page, terms]
+
+  - id: map_categories
+    name: Map keywords to categories
+    excel_step: map keywords to categories
+    tool: category_mapper
+    params:
+      rows: "=steps.classify_intent.rows"
+      categories: "=steps.load_categories.rows"
+
+  - id: score_priority
+    name: Score keyword priority
+    excel_step: identify high-priority keywords
+    description: High = transactional/commercial intent, mapped to a category, with enough search volume.
+    tool: table_query
+    params:
+      rows: "=steps.map_categories.rows"
+      vars:
+        min_volume: "=inputs.high_volume_threshold"
+      derive:
+        priority: "iff(row.intent in ['transactional', 'commercial'] and not is_blank(row.category) and iff(is_blank(get(row, 'search_volume')), true, row.search_volume >= vars.min_volume), 'high', iff(row.intent == 'informational' or is_blank(row.category), 'low', 'medium'))"
+        priority_basis: "iff(is_blank(get(row, 'search_volume')), 'intent and category only (no search volume supplied)', 'intent, category and search volume')"
+        priority_order: "iff(row.priority == 'high', 1, iff(row.priority == 'medium', 2, 3))"
+        recommended_target_page: "row.target_page"
+      sort_by: [priority_order, "-search_volume", keyword]
+      label: Keyword priority rule
+
+  - id: high_priority
+    name: Identify high-priority keywords
+    excel_step: identify high-priority keywords
+    tool: table_query
+    params:
+      rows: "=steps.score_priority.rows"
+      where: "row.priority == 'high'"
+      label: High-priority keywords
+
+  - id: export_results
+    name: Export results
+    excel_step: export results
+    tool: dataset_exporter
+    params:
+      rows: "=steps.score_priority.rows"
+      name: keyword_report
+      columns: [keyword, search_volume, intent, intent_confidence, category, priority, recommended_target_page]
+
+final:
+  warnings:
+    - when: "steps.remove_duplicates.removed_count > 0"
+      message: "{{ steps.remove_duplicates.removed_count }} duplicate keyword(s) were removed."
+    - when: "steps.map_categories.unmapped_count > 0"
+      message: "{{ steps.map_categories.unmapped_count }} keyword(s) did not match any category and have no target page."
+    - when: "steps.classify_intent.defaulted_count > 0"
+      message: "{{ steps.classify_intent.defaulted_count }} keyword(s) had no intent signal words and were classified 'commercial' with low confidence."
+    - when: "len(steps.read_keywords.warnings) > 0"
+      message: "{{ join(steps.read_keywords.warnings, ' ') }}"
+  outcomes:
+    completed:
+      headline: "{{ steps.classify_intent.count }} unique keywords classified; {{ steps.high_priority.count }} high priority"
+      result:
+        keywords_classified: "=steps.classify_intent.count"
+        duplicates_removed: "=steps.remove_duplicates.removed_count"
+        intent_counts: "=steps.classify_intent.intent_counts"
+        high_priority_keywords: "=steps.high_priority.rows"
+        keyword_report: "=steps.score_priority.rows"
+        exported_file: "=steps.export_results.path"

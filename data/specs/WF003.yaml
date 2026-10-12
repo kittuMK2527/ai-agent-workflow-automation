@@ -1,0 +1,158 @@
+# WF003 - Vendor File Processing
+workflow_id: WF003
+routing_examples:
+  - Clean up this vendor spreadsheet
+  - Validate the supplier product file I uploaded
+  - Process the vendor catalogue and tell me which rows are bad
+routing_keywords: [vendor file, vendor spreadsheet, supplier file, vendor data, invalid rows, clean file, process vendor, upload, spreadsheet]
+
+examples:
+  - title: Excel test question, with the sample CSV attached
+    request: "Process this vendor spreadsheet and show invalid rows."
+    attachments: [vendor_file_sample.csv]
+  - title: Same request with an XLSX file attached
+    request: "Process this vendor spreadsheet and show invalid rows."
+    attachments: [vendor_file_sample.xlsx]
+  - title: Excel test question with no file (asks for it)
+    request: "Process this vendor spreadsheet and show invalid rows."
+    expect_state: needs_input
+    note: "No file is attached, so the agent asks for one instead of inventing data."
+
+interpretation_notes:
+  - "The workbook requires a SKU and a product name. Header names vary between vendors, so columns are detected from synonym lists (this file) and renamed to canonical names: sku, product_name, price, quantity, brand, category."
+  - "'description' is deliberately NOT accepted as a synonym for product name: in vendor files it usually holds long marketing text."
+  - "Cleaning = renamed columns, trimmed whitespace, invalid rows removed. Values such as prices are not rewritten."
+  - "A row is invalid when its SKU or its product name is blank (Excel decision logic). Both reasons are reported when both apply."
+error_handling_notes:
+  - "If the file has no recognisable SKU or product-name column the workflow stops with a user-correctable message listing the accepted header names; no rows are guessed."
+  - "Unreadable, empty or oversized files stop the workflow with a clear message."
+
+inputs:
+  - name: vendor_file
+    type: file
+    required: true
+    description: Vendor CSV or XLSX file (attach it or name a sample file).
+    covers: ["CSV/XLSX file containing vendor product data"]
+    aliases: [file, spreadsheet, attachment]
+
+tool_map:
+  "Excel/CSV parser": [file_parser, detect_columns, normalize_columns, dataset_exporter]
+  "data validation": [data_validator]
+
+steps:
+  - id: read_file
+    name: Read file
+    excel_step: Read file
+    tool: file_parser
+    params:
+      source: "=inputs.vendor_file"
+    ensure:
+      - expr: "output.row_count > 0"
+        message: "The file has a header but no data rows."
+        category: user_correctable
+
+  - id: detect_columns
+    name: Detect columns
+    excel_step: detect columns
+    description: Match the file's headers to canonical columns using synonym lists.
+    tool: detect_columns
+    params:
+      headers: "=steps.read_file.columns"
+      targets:
+        sku: [item code, product code, part number, sku code, item number, article number, vendor sku, style number]
+        product_name: [product title, name, item name, title, product, item description]
+        price: [unit price, cost, wholesale price, vendor price, cost price]
+        quantity: [qty, qty on hand, stock, quantity on hand, on hand, units]
+        brand: [manufacturer, make]
+        category: [department, product category, group]
+
+  - id: normalize_columns
+    name: Normalize column names
+    excel_step: normalize column names
+    tool: normalize_columns
+    params:
+      rows: "=steps.read_file.rows"
+      mapping: "=steps.detect_columns.mapping"
+
+  - id: required_fields_present
+    name: Required columns present?
+    excel_step: validate required fields
+    description: The SKU and product-name columns must exist before rows can be validated.
+    kind: decision
+    cases:
+      - label: "SKU or product-name column not found"
+        when: "not (exists(steps.detect_columns.detected.sku) and exists(steps.detect_columns.detected.product_name))"
+        then:
+          type: fail
+          category: user_correctable
+          message: "The file has no recognisable column for: {{ join(steps.detect_columns.missing_targets, ', ') }}. Columns found: {{ join(steps.read_file.columns, ', ') }}. Rename a header to 'SKU' / 'Product Name' (or e.g. 'Item Code' / 'Product Title') and try again."
+      - label: "Required columns found"
+        then: {type: continue, message: "SKU and product-name columns detected."}
+
+  - id: identify_invalid_rows
+    name: Identify invalid rows
+    excel_step: identify invalid rows
+    description: "Excel rule: rows missing SKU or product name are invalid."
+    tool: data_validator
+    params:
+      rows: "=steps.normalize_columns.rows"
+      required_columns: [sku, product_name]
+      rules:
+        - id: missing_sku
+          description: SKU is missing
+          invalid_when: "is_blank(row.sku)"
+        - id: missing_product_name
+          description: Product name is missing
+          invalid_when: "is_blank(row.product_name)"
+
+  - id: export_cleaned
+    name: Export cleaned dataset
+    excel_step: produce cleaned dataset
+    tool: dataset_exporter
+    params:
+      rows: "=steps.identify_invalid_rows.valid_rows"
+      name: vendor_cleaned
+
+  - id: build_invalid_report
+    name: Build invalid-row report
+    excel_step: produce cleaned dataset
+    when: "steps.identify_invalid_rows.invalid_count > 0"
+    tool: table_query
+    params:
+      rows: "=steps.identify_invalid_rows.invalid_rows"
+      derive:
+        source_row: "row.row_number"
+        problems: "join(row.reasons, '; ')"
+        sku: "get(row.row, 'sku')"
+        product_name: "get(row.row, 'product_name')"
+      select: [source_row, problems, sku, product_name]
+
+  - id: export_invalid_report
+    name: Export invalid-row report
+    excel_step: produce cleaned dataset
+    when: "steps.identify_invalid_rows.invalid_count > 0"
+    tool: dataset_exporter
+    params:
+      rows: "=steps.build_invalid_report.rows"
+      name: vendor_invalid_rows
+
+final:
+  warnings:
+    - when: "len(steps.read_file.warnings) > 0"
+      message: "{{ join(steps.read_file.warnings, ' ') }}"
+    - when: "len(steps.detect_columns.unmapped_headers) > 0"
+      message: "Columns kept but not recognised as standard fields: {{ join(steps.detect_columns.unmapped_headers, ', ') }}."
+  outcomes:
+    completed:
+      headline: "{{ steps.identify_invalid_rows.valid_count }} of {{ steps.identify_invalid_rows.total }} rows are valid; {{ steps.identify_invalid_rows.invalid_count }} invalid"
+      result:
+        validation_summary:
+          total_rows: "=steps.identify_invalid_rows.total"
+          valid_rows: "=steps.identify_invalid_rows.valid_count"
+          invalid_rows: "=steps.identify_invalid_rows.invalid_count"
+          problems_by_rule: "=steps.identify_invalid_rows.by_rule"
+        detected_columns: "=steps.detect_columns.detected"
+        invalid_row_report: "=coalesce(steps.build_invalid_report.rows, [])"
+        cleaned_file: "=steps.export_cleaned.path"
+        invalid_report_file: "=coalesce(steps.export_invalid_report.path, 'none (no invalid rows)')"
+        cleaned_dataset: "=steps.identify_invalid_rows.valid_rows"

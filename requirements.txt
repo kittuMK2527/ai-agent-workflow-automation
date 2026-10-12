@@ -1,0 +1,8 @@
+# Runtime dependencies (tested with Python 3.11).
+streamlit>=1.40,<2
+pandas>=2.1,<3
+openpyxl>=3.1,<4
+pydantic>=2.6,<3
+openai>=1.50,<3
+python-dotenv>=1.0,<2
+PyYAML>=6.0,<7

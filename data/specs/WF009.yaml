@@ -1,0 +1,255 @@
+# WF009 - Employee Task Assignment
+workflow_id: WF009
+routing_examples:
+  - Who on the team should take this ticket?
+  - Find the right person for this work item
+  - Assign a task to whoever has the skills and free time
+routing_keywords: [assign, assignment, task, employee, developer, who should, best person, workload, capacity, delegate, ticket]
+
+examples:
+  - title: Task with a clear owner
+    request: "Assign this urgent task to the best available developer: Fix the checkout payment bug in the React frontend"
+  - title: No suitable employee (escalates)
+    request: "Assign this task to a developer: Migrate the database to MongoDB"
+  - title: Excel test question (asks what the task is)
+    request: "Assign this urgent task to the best available developer."
+    expect_state: needs_input
+
+interpretation_notes:
+  - "Required skills are taken from the request ('skills') or detected by keyword matching against data/reference/skill_lexicon.json - not by an LLM. If none can be determined the workflow asks for them; skills are never guessed."
+  - "Excel decision logic: 'Prefer employees with required skills and available capacity; escalate if no suitable employee exists'. A suitable employee has ALL required skills, is active, and has at least min_available_hours of free capacity this week."
+  - "Free capacity = weekly capacity hours - estimated hours of open tasks assigned to that employee (done tasks do not count). Employees on leave have 0 free hours."
+  - "Ranking score = 100 x (0.6 x skill match + 0.4 x min(free hours / weekly capacity, 1)); candidates that are not suitable are listed below the suitable ones with the reason they were excluded."
+  - "The employee list and workload come from the SIMULATED employee/task database (fixture data)."
+  - "Priority and deadline are carried into the assignment summary; the workbook gives no rule that changes ranking based on them, so none is invented."
+error_handling_notes:
+  - "No suitable employee ends the workflow with outcome 'escalated' (a business result, not an error) and explains why each candidate was excluded."
+  - "Database outages are retried (bounded) and then fail the workflow."
+
+inputs:
+  - name: task_description
+    type: string
+    required: true
+    description: What the task is about, e.g. "Fix the checkout payment bug in the React frontend".
+    covers: ["Task description"]
+    aliases: [task, ticket, work item]
+  - name: required_skills
+    type: list
+    items: string
+    description: Skills the assignee must have (otherwise detected from the task description).
+    covers: ["skills"]
+    aliases: [skills, skill]
+  - name: role
+    type: string
+    description: Only consider employees with this role, e.g. developer.
+    aliases: [role, team]
+    extract_pattern: '(?i)\b(developer|designer|devops|qa engineer|content writer)s?\b'
+  - name: priority
+    type: choice
+    choices: [low, medium, high, urgent]
+    description: Task priority.
+    covers: ["priority"]
+  - name: deadline
+    type: date
+    description: Deadline (YYYY-MM-DD).
+    covers: ["deadline"]
+    aliases: [due, due date]
+  - name: min_available_hours
+    type: number
+    minimum: 0
+    default: 4
+    description: Minimum free hours this week for an employee to count as available.
+
+data_sources:
+  - name: Employee/task database (simulated)
+    description: Employees with skills and weekly capacity, and open tasks with estimated hours.
+    covers: ["employee list", "workload"]
+
+tool_map:
+  "Employee/task database": [employee_db, task_analyzer]
+  "ranking logic": [table_query, table_aggregate, table_join, report_builder]
+
+steps:
+  - id: analyze_task
+    name: Understand task requirements
+    excel_step: Understand task requirements
+    tool: task_analyzer
+    params:
+      task_description: "=inputs.task_description"
+      explicit_skills: "=coalesce(inputs.required_skills, [])"
+
+  - id: skills_known
+    name: Required skills known?
+    excel_step: Understand task requirements
+    kind: decision
+    cases:
+      - label: No required skills could be determined
+        when: "len(steps.analyze_task.required_skills) == 0"
+        then:
+          type: await_input
+          missing: [required_skills]
+          message: "I could not tell which skills this task needs. Please list the required skills (for example: python, api, postgresql)."
+      - label: Required skills determined
+        then: {type: continue, message: "Required skills: {{ join(steps.analyze_task.required_skills, ', ') }}."}
+
+  - id: load_employees
+    name: Load employees
+    excel_step: compare employee skills
+    tool: employee_db
+    params:
+      entity: employees
+      filters:
+        role: "=inputs.role"
+    ensure:
+      - expr: "output.count > 0"
+        message: "No employees were found{{ iff(exists(inputs.role), ' with the role ' + inputs.role, '') }}. Check the role name."
+        category: user_correctable
+
+  - id: compare_skills
+    name: Compare employee skills
+    excel_step: compare employee skills
+    tool: table_query
+    params:
+      rows: "=steps.load_employees.rows"
+      vars:
+        required: "=steps.analyze_task.required_skills"
+      derive:
+        matched_skills: "intersect(row.skills, vars.required)"
+        matched_text: "join(row.matched_skills, ', ')"
+        skill_match: "len(row.matched_skills) / len(vars.required)"
+      label: Skill match
+
+  - id: load_open_tasks
+    name: Load open tasks
+    excel_step: check current workload
+    tool: employee_db
+    params:
+      entity: open_tasks
+
+  - id: sum_workload
+    name: Sum open hours per employee
+    excel_step: check current workload
+    tool: table_aggregate
+    params:
+      rows: "=steps.load_open_tasks.rows"
+      group_by: [assignee_id]
+      aggregations:
+        open_hours: {op: sum, field: estimated_hours}
+        open_tasks: {op: count}
+
+  - id: join_workload
+    name: Attach workload to candidates
+    excel_step: check current workload
+    tool: table_join
+    params:
+      left: "=steps.compare_skills.rows"
+      right: "=steps.sum_workload.rows"
+      left_key: employee_id
+      right_key: assignee_id
+      how: left
+      right_fields: [open_hours, open_tasks]
+
+  - id: compute_capacity
+    name: Compute free capacity
+    excel_step: check current workload
+    description: "Excel rule: prefer employees with the required skills and available capacity."
+    tool: table_query
+    params:
+      rows: "=steps.join_workload.rows"
+      vars:
+        min_hours: "=inputs.min_available_hours"
+      derive:
+        current_load: "coalesce(row.open_hours, 0)"
+        available_hours: "iff(row.status == 'active', row.weekly_capacity_hours - row.current_load, 0)"
+        eligible: "row.skill_match >= 1 and row.available_hours >= vars.min_hours"
+        exclusion_reason: "iff(row.eligible, '', iff(row.status != 'active', 'not available (' + row.status + ')', iff(row.skill_match < 1, 'missing required skills', 'not enough free capacity')))"
+      label: "Excel rule: required skills and available capacity"
+
+  - id: rank_candidates
+    name: Rank candidates
+    excel_step: rank candidates
+    tool: table_query
+    params:
+      rows: "=steps.compute_capacity.rows"
+      derive:
+        score: "round(100 * (0.6 * row.skill_match + 0.4 * min(row.available_hours / row.weekly_capacity_hours, 1)), 1)"
+      sort_by: ["-eligible", "-score", "name"]
+      rank_field: rank
+      select: [rank, employee_id, name, role, matched_text, skill_match, current_load, available_hours, weekly_capacity_hours, score, eligible, exclusion_reason]
+
+  - id: suitable_candidates
+    name: Suitable candidates
+    excel_step: select employee
+    tool: table_query
+    params:
+      rows: "=steps.rank_candidates.rows"
+      where: "row.eligible"
+      label: Suitable candidates
+
+  - id: suitable_exists
+    name: Any suitable employee?
+    excel_step: select employee
+    description: "Excel rule: escalate if no suitable employee exists."
+    kind: decision
+    cases:
+      - label: No suitable employee exists
+        when: "steps.suitable_candidates.count == 0"
+        then:
+          type: end
+          outcome: escalated
+          message: "No employee has all required skills ({{ join(steps.analyze_task.required_skills, ', ') }}) and enough free capacity. Escalate to the manager."
+      - label: At least one suitable employee
+        then: {type: continue, message: "{{ steps.suitable_candidates.count }} suitable candidate(s)."}
+
+  - id: pick_employee
+    name: Select the employee
+    excel_step: select employee
+    tool: table_query
+    params:
+      rows: "=steps.suitable_candidates.rows"
+      limit: 1
+
+  - id: assignment_summary
+    name: Generate assignment summary
+    excel_step: generate assignment summary
+    tool: report_builder
+    params:
+      title: Task assignment recommendation
+      sections:
+        - heading: Task
+          body: "=inputs.task_description"
+        - heading: Recommended employee
+          body:
+            - "{{ steps.pick_employee.rows[0].name }} ({{ steps.pick_employee.rows[0].role }}, {{ steps.pick_employee.rows[0].employee_id }})"
+            - "Priority: {{ coalesce(inputs.priority, 'not specified') }}"
+            - "Deadline: {{ coalesce(inputs.deadline, 'not specified') }}"
+        - heading: Reasoning
+          body:
+            - "Has all required skills: {{ join(steps.analyze_task.required_skills, ', ') }}"
+            - "Free capacity this week: {{ steps.pick_employee.rows[0].available_hours }}h of {{ steps.pick_employee.rows[0].weekly_capacity_hours }}h"
+            - "Ranked #1 of {{ steps.suitable_candidates.count }} suitable candidate(s), score {{ steps.pick_employee.rows[0].score }}"
+            - "{{ steps.analyze_task.note }}"
+
+final:
+  warnings:
+    - when: "steps.compute_capacity.error_count > 0"
+      message: "{{ steps.compute_capacity.error_count }} employee record(s) had missing capacity data and were not considered."
+  outcomes:
+    completed:
+      headline: "Assign to {{ steps.pick_employee.rows[0].name }} ({{ steps.pick_employee.rows[0].role }})"
+      result:
+        recommended_employee: "=steps.pick_employee.rows[0].name"
+        employee_id: "=steps.pick_employee.rows[0].employee_id"
+        priority: "=coalesce(inputs.priority, 'not specified')"
+        deadline: "=coalesce(inputs.deadline, 'not specified')"
+        required_skills: "=steps.analyze_task.required_skills"
+        task_summary: "=steps.assignment_summary.text"
+        ranking: "=steps.rank_candidates.rows"
+    escalated:
+      severity: warning
+      headline: "No suitable employee - escalate to the manager"
+      result:
+        required_skills: "=steps.analyze_task.required_skills"
+        priority: "=coalesce(inputs.priority, 'not specified')"
+        deadline: "=coalesce(inputs.deadline, 'not specified')"
+        why_nobody_qualifies: "=steps.rank_candidates.rows"

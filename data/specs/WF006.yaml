@@ -1,0 +1,122 @@
+# WF006 - Duplicate Product Detection
+workflow_id: WF006
+routing_examples:
+  - Are there any duplicate listings in our catalog?
+  - Check the product catalog for repeated or near-identical products
+  - Which SKUs look like the same product?
+routing_keywords: [duplicate, duplicates, duplicated, same product, repeated, near identical, catalog, deduplicate, matching products]
+
+examples:
+  - title: Excel test question
+    request: "Find likely duplicate products in the catalog."
+
+interpretation_notes:
+  - "Definite duplicate (Excel): rows whose SKU is identical after normalisation (case, spaces and punctuation ignored: 'SKU-2001', 'sku2001' and 'SKU 2001' are the same SKU)."
+  - "Possible duplicate (Excel: 'high attribute similarity'): the workbook does not define 'high'. Interpretation: weighted similarity >= similarity_threshold (default 0.85) over product name (text similarity, weight 0.7), category (0.15) and material (0.15)."
+  - "Variants are not duplicates: if two products both have a value for brand, color or size and the values differ, the pair is excluded ('Cotton Crew T-Shirt - White (M)' vs '(L)')."
+  - "Confidence: definite = 1.0; possible = lowest similarity inside the group; labelled 'high' when >= 0.95, otherwise 'medium'. Blank attribute values are treated as unknown, not as matching."
+error_handling_notes:
+  - "Pairwise comparison is limited to 2,000 products; a larger catalog stops the workflow with a message instead of running for a long time."
+
+inputs:
+  - name: catalog_file
+    type: file
+    description: Product catalog CSV (sku, product_name and optional brand, category, color, size, material).
+    default: catalog.csv
+    covers: ["Product catalog"]
+  - name: similarity_threshold
+    type: number
+    minimum: 0.5
+    maximum: 1
+    default: 0.85
+    description: Minimum weighted similarity for a possible duplicate.
+    aliases: [threshold, similarity]
+
+tool_map:
+  "CSV/database reader": [csv_reader]
+  "text similarity": [record_matcher, group_matches]
+
+steps:
+  - id: load_products
+    name: Load products
+    excel_step: Load products
+    tool: csv_reader
+    params:
+      source: "=inputs.catalog_file"
+      required_columns: [sku, product_name]
+    ensure:
+      - expr: "output.row_count > 1"
+        message: "At least two products are needed to look for duplicates."
+        category: user_correctable
+
+  - id: normalize
+    name: Normalize names and SKUs
+    excel_step: normalize names/SKUs
+    tool: table_query
+    params:
+      rows: "=steps.load_products.rows"
+      derive:
+        norm_sku: "norm_code(row.sku)"
+        norm_name: "norm_text(row.product_name)"
+
+  - id: compare_identifiers
+    name: Compare identifiers
+    excel_step: compare identifiers
+    description: "Excel rule: an exact SKU match is a definite duplicate."
+    tool: record_matcher
+    params:
+      rows: "=steps.normalize.rows"
+      mode: exact
+      exact_field: norm_sku
+      id_field: sku
+
+  - id: compare_attributes
+    name: Compare product attributes
+    excel_step: compare product attributes
+    description: "Excel rule: high attribute similarity is a possible duplicate."
+    tool: record_matcher
+    params:
+      rows: "=steps.normalize.rows"
+      mode: similar
+      id_field: sku
+      fields:
+        - {name: product_name, method: text, weight: 0.7}
+        - {name: category, method: exact, weight: 0.15}
+        - {name: material, method: exact, weight: 0.15}
+      blockers: [brand, color, size]
+      threshold: "=inputs.similarity_threshold"
+      exclude_pairs: "=steps.compare_identifiers.pairs"
+
+  - id: group_duplicates
+    name: Group likely duplicates
+    excel_step: group likely duplicates
+    tool: group_matches
+    params:
+      rows: "=steps.normalize.rows"
+      pairs: "=concat(steps.compare_identifiers.pairs, steps.compare_attributes.pairs)"
+      display_fields: [sku, product_name, brand, color, size]
+
+  - id: assign_confidence
+    name: Assign confidence
+    excel_step: assign confidence
+    tool: table_query
+    params:
+      rows: "=steps.group_duplicates.groups"
+      derive:
+        confidence_score: "iff(row.match_type == 'definite', 1.0, row.min_score)"
+        confidence_level: "iff(row.match_type == 'definite', 'definite', iff(row.min_score >= 0.95, 'high', 'medium'))"
+        why: "iff(row.match_type == 'definite', 'Identical SKU after normalisation', 'Similar ' + join(row.matching_fields, ', ') + ' and no conflicting brand/color/size')"
+      sort_by: ["-confidence_score", "group_id"]
+      select: [group_id, match_type, confidence_level, confidence_score, size, members_text, why]
+
+final:
+  outcomes:
+    completed:
+      headline: "{{ iff(steps.group_duplicates.total_groups == 0, 'No duplicates found', str(steps.group_duplicates.total_groups) + ' duplicate group(s): ' + str(steps.group_duplicates.definite_count) + ' definite, ' + str(steps.group_duplicates.possible_count) + ' possible') }}"
+      result:
+        products_checked: "=steps.load_products.row_count"
+        definite_groups: "=steps.group_duplicates.definite_count"
+        possible_groups: "=steps.group_duplicates.possible_count"
+        pairs_compared: "=steps.compare_attributes.compared_pairs"
+        pairs_skipped_for_conflicting_attributes: "=steps.compare_attributes.blocked_pairs"
+        duplicate_groups: "=steps.assign_confidence.rows"

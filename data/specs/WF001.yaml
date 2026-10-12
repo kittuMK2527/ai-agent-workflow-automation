@@ -1,0 +1,140 @@
+# WF001 - Inventory Restock Check
+# Executable interpretation of the Excel row. `excel_step` must match the workbook text exactly;
+# the registry refuses to load the spec if the Excel steps and this file drift apart.
+workflow_id: WF001
+routing_examples:
+  - Which items are running low and need to be reordered?
+  - Show me stock that is below the minimum level
+  - What should we reorder this week?
+routing_keywords: [restock, restocking, reorder, low stock, inventory, stock level, running low, minimum stock, replenish]
+
+examples:
+  - title: Excel test question
+    request: "Which products need restocking?"
+    note: "Uses each product's own minimum_stock from the inventory file."
+  - title: Custom threshold
+    request: "Which products are below 15 units and need restocking?"
+    note: "A threshold in the request overrides the per-product minimum."
+
+interpretation_notes:
+  - "The workbook does not say how the reorder quantity is calculated. Interpretation: target stock = minimum stock x restock_multiplier (default 2.0); suggested reorder quantity = ceil(target stock - current stock)."
+  - "'minimum stock threshold' is read from each product's minimum_stock column. A threshold given in the request overrides it for every product."
+  - "The comparison is strict (current_stock < minimum_stock): a product exactly at its minimum is not flagged, as the Excel rule says '<'."
+error_handling_notes:
+  - "Rows with a missing or non-numeric stock value are excluded and reported as a data-quality warning; they are never counted as low or as fine."
+  - "A missing/unreadable inventory file stops the workflow with a message that names the file."
+
+inputs:
+  - name: inventory_file
+    type: file
+    description: Product inventory CSV (needs sku, product_name, current_stock and minimum_stock columns).
+    default: inventory.csv
+    covers: ["Product inventory CSV"]
+  - name: minimum_stock
+    type: number
+    minimum: 0
+    description: Global minimum stock threshold; overrides every product's own minimum.
+    covers: ["minimum stock threshold"]
+    aliases: [threshold, minimum, below]
+    example: "below 15 units"
+  - name: restock_multiplier
+    type: number
+    minimum: 1
+    maximum: 10
+    default: 2.0
+    description: Target stock as a multiple of the minimum, used to size the reorder quantity.
+
+tool_map:
+  "CSV reader": [csv_reader]
+  "calculator": [table_query, table_aggregate]
+
+steps:
+  - id: load_inventory
+    name: Load inventory
+    excel_step: Load inventory
+    description: Read the inventory CSV and convert the stock columns to numbers.
+    tool: csv_reader
+    params:
+      source: "=inputs.inventory_file"
+      numeric_columns: [current_stock, minimum_stock]
+      required_columns: [sku, product_name, current_stock, minimum_stock]
+    ensure:
+      - expr: "output.row_count > 0"
+        message: "The inventory file contains no products."
+
+  - id: compare_stock
+    name: Compare stock with the minimum threshold
+    excel_step: compare current stock with minimum threshold
+    description: Work out the threshold that applies to each product and how far its stock is from it.
+    tool: table_query
+    params:
+      rows: "=steps.load_inventory.rows"
+      vars:
+        override: "=inputs.minimum_stock"
+      derive:
+        threshold: "coalesce(vars.override, row.minimum_stock)"
+        shortfall: "row.threshold - row.current_stock"
+      label: Stock versus threshold
+
+  - id: identify_low_stock
+    name: Identify low-stock products
+    excel_step: identify low-stock products
+    description: "Excel rule: if current_stock < minimum_stock, mark the product for restock."
+    tool: table_query
+    params:
+      rows: "=steps.compare_stock.rows"
+      where: "row.current_stock < row.threshold"
+      label: "Excel rule: current_stock < minimum_stock"
+
+  - id: calculate_reorder
+    name: Calculate reorder quantity
+    excel_step: calculate reorder quantity
+    description: Target stock = threshold x multiplier; reorder quantity = target stock - current stock.
+    tool: table_query
+    params:
+      rows: "=steps.identify_low_stock.rows"
+      vars:
+        multiplier: "=inputs.restock_multiplier"
+      derive:
+        target_stock: "ceil(row.threshold * vars.multiplier)"
+        reorder_quantity: "row.target_stock - row.current_stock"
+      label: Reorder quantity
+
+  - id: generate_restock_list
+    name: Generate restock list
+    excel_step: generate restock list
+    description: Order the list by how far each product is below its threshold.
+    tool: table_query
+    params:
+      rows: "=steps.calculate_reorder.rows"
+      sort_by: ["-shortfall", "sku"]
+      rank_field: priority_rank
+      select: [priority_rank, sku, product_name, current_stock, threshold, reorder_quantity]
+      select_optional: [category, supplier]
+
+  - id: totals
+    name: Total units to order
+    excel_step: generate restock list
+    description: Sum the suggested reorder quantities.
+    tool: table_aggregate
+    params:
+      rows: "=steps.generate_restock_list.rows"
+      aggregations:
+        total_units: {op: sum, field: reorder_quantity}
+
+final:
+  warnings:
+    - when: "steps.compare_stock.error_count > 0"
+      message: "{{ steps.compare_stock.error_count }} inventory row(s) had a missing or non-numeric stock value and were excluded from the check."
+    - when: "len(steps.load_inventory.warnings) > 0"
+      message: "{{ join(steps.load_inventory.warnings, ' ') }}"
+  outcomes:
+    completed:
+      headline: "{{ iff(steps.generate_restock_list.count == 0, 'No products need restocking', str(steps.generate_restock_list.count) + ' of ' + str(steps.load_inventory.row_count) + ' products need restocking') }}"
+      result:
+        products_checked: "=steps.load_inventory.row_count"
+        products_to_restock: "=steps.generate_restock_list.count"
+        total_units_to_order: "=coalesce(steps.totals.rows[0].total_units, 0)"
+        threshold_basis: "=iff(exists(inputs.minimum_stock), 'Global threshold of ' + str(inputs.minimum_stock) + ' units', 'Per-product minimum_stock column')"
+        reorder_rule: "=fmt('Reorder up to {} x the threshold', inputs.restock_multiplier)"
+        restock_list: "=steps.generate_restock_list.rows"

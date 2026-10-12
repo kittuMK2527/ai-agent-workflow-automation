@@ -1,0 +1,140 @@
+# WF005 - Customer Order Status
+workflow_id: WF005
+routing_examples:
+  - Has order ORD-1002 been delivered?
+  - What is the tracking status of my order?
+  - Check the shipment for alex.morgan@example.com
+routing_keywords: [order, order status, where is, tracking, shipment, shipped, delivery, delivered, track]
+routing_patterns: ['(?i)\bORD[-\s]?\d{3,8}\b', '[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}']
+
+examples:
+  - title: Excel test question
+    request: "Where is order ORD-1001?"
+  - title: Order that is not found (asks for another identifier)
+    request: "Where is order ORD-9999?"
+    expect_state: needs_input
+  - title: Lookup by customer email (two orders)
+    request: "Check the orders for alex.morgan@example.com"
+
+interpretation_notes:
+  - "The identifier is an order ID (ORD-1001, case/hyphen tolerant) or an email address. An email can match several orders; all are returned."
+  - "Excel decision logic: 'If no order is found, ask for another identifier'. This pauses the workflow in an 'awaiting input' state and asks for a new identifier instead of failing or guessing."
+  - "The order system and shipment lookup are SIMULATED (fixture data). Every result is labelled simulated."
+  - "Shipment lookup is not essential to know the order status, so if the (simulated) shipment service stays unavailable after retries the workflow still returns the order status and finishes as PARTIAL with a warning."
+error_handling_notes:
+  - "Order search / details: transient errors are retried up to 3 times; then the workflow fails."
+  - "Shipment lookup: transient errors are retried up to 3 times; then the step is marked failed and the workflow continues (partial result)."
+
+inputs:
+  - name: identifier
+    type: string
+    required: true
+    grounded: true
+    description: Order ID (like ORD-1001) or the customer's email address.
+    covers: ["Order ID or customer email"]
+    aliases: [order, order id, email, order number]
+    extract_pattern: '(?i)\bORD[-\s]?\d{3,8}\b|[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}'
+
+tool_map:
+  "Order database/API": [identifier_validator, order_search, order_details]
+  "shipment lookup": [shipment_lookup]
+
+steps:
+  - id: validate_identifier
+    name: Validate identifier
+    excel_step: Validate identifier
+    tool: identifier_validator
+    params:
+      identifier: "=inputs.identifier"
+
+  - id: identifier_is_valid
+    name: Identifier valid?
+    excel_step: Validate identifier
+    kind: decision
+    cases:
+      - label: Not an order ID or email
+        when: "not steps.validate_identifier.valid"
+        then:
+          type: await_input
+          missing: [identifier]
+          message: "'{{ inputs.identifier }}' is not a valid order ID (like ORD-1001) or email address. Please provide one of those."
+      - label: Valid identifier
+        then: {type: continue, message: "Recognised as {{ steps.validate_identifier.kind }}."}
+
+  - id: search_orders
+    name: Search order data
+    excel_step: search order data
+    tool: order_search
+    params:
+      kind: "=steps.validate_identifier.kind"
+      value: "=steps.validate_identifier.normalized"
+
+  - id: order_found
+    name: Order found?
+    excel_step: search order data
+    description: "Excel rule: if no order is found, ask for another identifier."
+    kind: decision
+    cases:
+      - label: No order found
+        when: "steps.search_orders.count == 0"
+        then:
+          type: await_input
+          missing: [identifier]
+          message: "No order was found for {{ steps.validate_identifier.normalized }}. Please provide another order ID or the email address used at checkout."
+      - label: Order(s) found
+        then: {type: continue, message: "{{ steps.search_orders.count }} order(s) found."}
+
+  - id: get_order_status
+    name: Retrieve order status
+    excel_step: retrieve order status
+    tool: order_details
+    params:
+      order_ids: "=steps.search_orders.order_ids"
+    ensure:
+      - expr: "output.count > 0"
+        message: "The order system returned no details for the matched order(s)."
+
+  - id: lookup_shipments
+    name: Retrieve shipment information
+    excel_step: retrieve shipment information
+    description: Not essential for the status itself, so a persistent outage yields a partial result.
+    tool: shipment_lookup
+    on_failure: continue
+    params:
+      order_ids: "=steps.search_orders.order_ids"
+
+  - id: combine_order_and_shipment
+    name: Combine order and shipment data
+    excel_step: summarize current status
+    tool: table_join
+    params:
+      left: "=steps.get_order_status.orders"
+      right: "=coalesce(steps.lookup_shipments.shipments, [])"
+      left_key: order_id
+      right_key: order_id
+      how: left
+      right_fields: [carrier, tracking_number, shipment_status, eta, last_update]
+
+  - id: summarize_status
+    name: Summarize current status
+    excel_step: summarize current status
+    tool: table_query
+    params:
+      rows: "=steps.combine_order_and_shipment.rows"
+      derive:
+        shipment_summary: "iff(is_blank(row.tracking_number), 'No shipment information yet', row.carrier + ' - ' + row.shipment_status + ' (tracking ' + row.tracking_number + ', ETA ' + str(row.eta) + ')')"
+        summary: "'Order ' + row.order_id + ' is ' + row.status + '. ' + row.shipment_summary + '.'"
+      select: [order_id, status, order_date, items, total, shipment_status, carrier, tracking_number, eta, last_update, summary]
+
+final:
+  warnings:
+    - when: "not exists(steps.lookup_shipments)"
+      message: "Shipment tracking is temporarily unavailable, so the order status is shown without shipment details. Try again shortly."
+  outcomes:
+    completed:
+      headline: "{{ iff(steps.summarize_status.count == 1, steps.summarize_status.rows[0].summary, str(steps.summarize_status.count) + ' orders found for ' + steps.validate_identifier.normalized) }}"
+      result:
+        orders: "=steps.summarize_status.rows"
+        order_count: "=steps.summarize_status.count"
+        shipment_lookup_available: "=exists(steps.lookup_shipments)"
+        data_source: "SIMULATED order system and carrier API (fixture data, not a live system)"

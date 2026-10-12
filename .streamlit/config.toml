@@ -1,0 +1,23 @@
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false
+
+# Light and dark are defined separately (no `base`) so the app follows the
+# visitor's system setting, and st.context.theme.type stays correct on reruns.
+[theme]
+primaryColor = "#4F46E5"
+font = "sans serif"
+
+[theme.light]
+backgroundColor = "#F4F6FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0C1424"
+
+[theme.dark]
+backgroundColor = "#070B18"
+secondaryBackgroundColor = "#0F1730"
+textColor = "#E8EDFB"

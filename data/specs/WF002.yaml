@@ -1,0 +1,135 @@
+# WF002 - Product Price Validation
+workflow_id: WF002
+routing_examples:
+  - Compare our prices against the vendor price list
+  - Which products have a vendor price that is off from ours?
+  - Check vendor prices for discrepancies
+routing_keywords: [price, prices, vendor price, price difference, validate prices, price check, discrepancy, mismatch, differs]
+
+examples:
+  - title: Excel test question
+    request: "Find products where vendor price differs by more than 10%."
+  - title: Stricter threshold
+    request: "Find products where vendor price differs by more than 5%."
+
+interpretation_notes:
+  - "Percentage difference = (vendor price - internal price) / internal price x 100, so the internal price is the base. The sign shows the direction (positive = vendor is higher)."
+  - "'Exceeds 10%' is applied to the absolute difference and is strict: exactly 10.00% is not flagged. The percentage is rounded to 2 decimals before the comparison so floating-point noise cannot flip the result."
+  - "The 10% threshold comes from the Excel decision logic; a different threshold in the request overrides it (threshold_pct)."
+  - "Products present in only one of the two files are reported as unmatched, not silently dropped."
+error_handling_notes:
+  - "Rows whose prices are missing, non-numeric or zero cannot be compared; they are excluded and reported."
+
+inputs:
+  - name: products_file
+    type: file
+    description: Internal product CSV (sku, price).
+    default: products.csv
+    covers: ["Product CSV"]
+  - name: vendor_prices_file
+    type: file
+    description: Vendor price list CSV (sku, vendor_price).
+    default: vendor_prices.csv
+    covers: ["vendor price list"]
+  - name: threshold_pct
+    type: number
+    minimum: 0
+    maximum: 1000
+    default: 10
+    description: Flag products whose price difference is larger than this percentage.
+    aliases: [threshold, percent, percentage, differs by more than]
+    example: "more than 10%"
+
+tool_map:
+  "CSV reader": [csv_reader]
+  "calculator": [table_query, table_join]
+
+steps:
+  - id: load_products
+    name: Load internal prices
+    excel_step: Load product prices
+    tool: csv_reader
+    params:
+      source: "=inputs.products_file"
+      numeric_columns: [price]
+      required_columns: [sku, price]
+  - id: load_vendor_prices
+    name: Load vendor prices
+    excel_step: Load product prices
+    tool: csv_reader
+    params:
+      source: "=inputs.vendor_prices_file"
+      numeric_columns: [vendor_price]
+      required_columns: [sku, vendor_price]
+  - id: match_by_sku
+    name: Match products by SKU
+    excel_step: match products by SKU
+    description: Join the two lists on SKU, ignoring case and punctuation (sku-1006 matches SKU-1006).
+    tool: table_join
+    params:
+      left: "=steps.load_products.rows"
+      right: "=steps.load_vendor_prices.rows"
+      left_key: sku
+      right_key: sku
+      how: inner
+      right_suffix: vendor
+  - id: compare_prices
+    name: Compare internal and vendor prices
+    excel_step: compare internal and vendor prices
+    tool: table_query
+    params:
+      rows: "=steps.match_by_sku.rows"
+      derive:
+        price_difference: "round(row.vendor_price - row.price, 2)"
+      label: Price difference
+  - id: calculate_percentage
+    name: Calculate percentage difference
+    excel_step: calculate percentage difference
+    tool: table_query
+    params:
+      rows: "=steps.compare_prices.rows"
+      derive:
+        pct_difference: "round(row.price_difference / row.price * 100, 2)"
+      label: Percentage difference
+  - id: flag_exceptions
+    name: Flag price exceptions
+    excel_step: flag exceptions
+    description: "Excel rule: flag when the price difference exceeds 10%."
+    tool: table_query
+    params:
+      rows: "=steps.calculate_percentage.rows"
+      vars:
+        threshold: "=inputs.threshold_pct"
+      derive:
+        abs_pct_difference: "abs(row.pct_difference)"
+        is_exception: "row.abs_pct_difference > vars.threshold"
+      label: "Excel rule: price difference exceeds threshold"
+  - id: list_exceptions
+    name: List exceptions
+    excel_step: flag exceptions
+    tool: table_query
+    params:
+      rows: "=steps.flag_exceptions.rows"
+      where: "row.is_exception"
+      sort_by: ["-abs_pct_difference", "sku"]
+      select: [sku, price, vendor_price, price_difference, pct_difference]
+      select_optional: [product_name, vendor_name]
+      label: Exceptions only
+
+final:
+  warnings:
+    - when: "steps.match_by_sku.unmatched_left_count + steps.match_by_sku.unmatched_right_count > 0"
+      message: "{{ steps.match_by_sku.unmatched_left_count }} internal product(s) have no vendor price and {{ steps.match_by_sku.unmatched_right_count }} vendor SKU(s) have no internal product; they were not compared."
+    - when: "steps.compare_prices.error_count + steps.calculate_percentage.error_count > 0"
+      message: "Some matched rows had missing or zero prices and could not be compared."
+  outcomes:
+    completed:
+      headline: "{{ steps.list_exceptions.count }} of {{ steps.match_by_sku.count }} matched products differ by more than {{ inputs.threshold_pct }}%"
+      result:
+        matched_products: "=steps.match_by_sku.count"
+        exceptions_found: "=steps.list_exceptions.count"
+        threshold_pct: "=inputs.threshold_pct"
+        exceptions: "=steps.list_exceptions.rows"
+        all_comparisons: "=steps.flag_exceptions.rows"
+        internal_only_skus: "=steps.match_by_sku.unmatched_left"
+        vendor_only_skus: "=steps.match_by_sku.unmatched_right"

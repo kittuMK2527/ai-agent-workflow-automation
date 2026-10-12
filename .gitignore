@@ -1,0 +1,38 @@
+# secrets and local configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# generated at runtime (keep the folders, not their contents)
+outputs/*
+!outputs/.gitkeep
+uploads/*
+!uploads/.gitkeep
+*.log
+
+# editors / OS / tooling
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# test / build output
+.coverage
+htmlcov/
+build/
+dist/
+
+# Office lock files (created while a workbook is open in Excel / LibreOffice)
+~$*
+.~lock.*#
